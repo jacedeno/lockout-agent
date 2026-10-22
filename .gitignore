@@ -1,0 +1,19 @@
+# Secrets: credentials live in the secrets directory, never here
+.env
+.env.*
+*.pem
+*.key
+id_*
+secrets/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Data and run outputs
+data/raw/
+data/cache/
+runs/
+*.receipt.zip
