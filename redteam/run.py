@@ -47,7 +47,8 @@ def run_probe(name, runner, workroot, engine, runtime, timeout):
 
     expected, judge = PROBES[name]
     if judge == "oom":
-        contained = summary["oom_killed"] or summary["exit_code"] == 137
+        # 137 alone is any SIGKILL, including the runner's own timeout kill, so it proves nothing.
+        contained = summary["oom_killed"] and not summary["timed_out"]
     elif judge == "timeout":
         contained = summary["timed_out"]
     else:

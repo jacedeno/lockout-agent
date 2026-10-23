@@ -15,6 +15,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from .chain import EventLog, canonical, verify_chain
 
 FORMAT = "arz-receipt/1"
+# Bundles reach /verify from anyone, so cap what verification will read.
+MAX_ENTRIES = 1000
+MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 
 
 def sha256_bytes(data):
@@ -84,6 +87,18 @@ def write_bundle(out_path, log, artifacts_root, private_key, job_id, extra=None)
     return manifest
 
 
+def _well_formed(manifest):
+    """True if the manifest has every field verification reads, with the right types."""
+    log, signer, artifacts = manifest.get("log"), manifest.get("signer"), manifest.get("artifacts")
+    return (isinstance(manifest.get("format"), str)
+            and isinstance(log, dict) and isinstance(log.get("sha256"), str)
+            and isinstance(log.get("head"), str) and isinstance(log.get("events"), int)
+            and isinstance(signer, dict) and isinstance(signer.get("public_key"), str)
+            and isinstance(artifacts, list)
+            and all(isinstance(a, dict) and isinstance(a.get("path"), str) and isinstance(a.get("sha256"), str)
+                    for a in artifacts))
+
+
 def verify_bundle(source, trusted_public_key=None):
     """Check signature, signer, log chain and every artifact hash.
 
@@ -95,13 +110,24 @@ def verify_bundle(source, trusted_public_key=None):
         checks.append({"check": name, "ok": bool(ok), "detail": detail})
         return ok
 
-    z = zipfile.ZipFile(io.BytesIO(source) if isinstance(source, bytes) else source)
+    try:
+        z = zipfile.ZipFile(io.BytesIO(source) if isinstance(source, bytes) else source)
+    except (zipfile.BadZipFile, OSError) as e:
+        check("bundle is a zip", False, str(e))
+        return {"ok": False, "checks": checks}
+    infos = z.infolist()
+    total = sum(i.file_size for i in infos)
+    if not check("bundle size", len(infos) <= MAX_ENTRIES and total <= MAX_UNCOMPRESSED_BYTES,
+                 f"{len(infos)} entries, {total} bytes uncompressed"):
+        return {"ok": False, "checks": checks}
     names = set(z.namelist())
     try:
         receipt = json.loads(z.read("receipt.json"))
         manifest, signature = receipt["manifest"], base64.b64decode(receipt["signature"])
-    except (KeyError, ValueError) as e:
+    except (KeyError, ValueError, TypeError) as e:
         check("receipt.json readable", False, str(e))
+        return {"ok": False, "checks": checks}
+    if not check("manifest structure", _well_formed(manifest)):
         return {"ok": False, "checks": checks}
     check("format", manifest.get("format") == FORMAT, manifest.get("format", ""))
 
@@ -117,7 +143,13 @@ def verify_bundle(source, trusted_public_key=None):
 
     log_bytes = z.read("log.jsonl") if "log.jsonl" in names else b""
     check("log hash", sha256_bytes(log_bytes) == manifest["log"]["sha256"])
-    log = EventLog.from_jsonl(log_bytes.decode())
+    try:
+        log = EventLog.from_jsonl(log_bytes.decode())
+        if not all(isinstance(e, dict) for e in log.events):
+            raise ValueError("an event is not a JSON object")
+    except ValueError as e:  # includes UnicodeDecodeError and JSONDecodeError
+        check("log readable", False, str(e))
+        return {"ok": False, "checks": checks}
     problems = verify_chain(log.events)
     check("log chain", not problems, "; ".join(problems))
     check("log head", log.head == manifest["log"]["head"] and len(log.events) == manifest["log"]["events"])

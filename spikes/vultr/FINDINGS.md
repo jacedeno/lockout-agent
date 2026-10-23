@@ -1,7 +1,7 @@
 # Vultr spike findings — 2026-10-22
 
 Account: a Vultr organization account. Region `dfw`, plan `vc2-1c-1gb`, Ubuntu 24.04 (`os_id` 2284).
-Total cost of all runs so far: $0.13. Every resource was deleted and verified gone afterwards.
+Total cost of all runs so far: $0.14. Every resource was deleted and verified gone afterwards.
 
 Run with the key from `$ARZ_SECRETS_DIR/vultr.env` loaded into the environment:
 
@@ -61,7 +61,7 @@ Escape probes on the booted sandbox (`redteam/run.py --host-probes`, 10 s timeou
 | Probe | Docker (runc) | gVisor (runsc) |
 |---|---|---|
 | net_egress, metadata, secrets, fs_write, privilege | contained | contained |
-| fork_bomb | contained (stopped at 127 processes) | **probe crashed after its first fork (exit 2, no output)** |
+| fork_bomb | contained (stopped at 127 processes) | probe died after its first fork (exit 2, no output); see the re-test below |
 | mem_bomb | OOM-killed | OOM-killed |
 | timeout | killed at 10 s | killed at 10 s |
 | host_egress, host_metadata (VM layer) | contained | contained |
@@ -79,18 +79,38 @@ Escape probes on the booted sandbox (`redteam/run.py --host-probes`, 10 s timeou
 
 ### Consequences for the design
 
-1. **Runtime: Docker (runc) is primary.** gVisor breaks `fork()` in this setup, so any job that
-   forks (including Python `multiprocessing`) would fail under it. It stays optional and
-   unproven.
+1. **Runtime: Docker (runc) is primary for now.** The first reading — "gVisor breaks `fork()`,
+   so any forking job would fail" — was wrong; see the gVisor re-test below. gVisor stays an
+   optional second boundary until the full probe suite passes under it.
 2. **Four minutes from create to ready is too slow for a live demo per job.** Options:
    a **warm pool of one** pre-booted sandbox, destroyed after its job and replaced in the
    background (user-perceived wait ~0, cost ~$0.007/h), or stock image + no snapshot (faster
    boot, but packages would need egress at job time — rejected).
 3. Snapshot storage is a small ongoing cost; keep one current snapshot and delete old ones.
 
+## gVisor re-test — 2026-10-23
+
+Stock Ubuntu 24.04 instance, Docker + runsc installed as in `build.sh`, `python:3.12-slim`, and
+the same lockdown flags as `arz-run` (`--network none --read-only --tmpfs /tmp --memory 512m
+--cap-drop ALL --no-new-privileges --user 65534`). A benign job did one `os.fork()` and ran a
+`multiprocessing.Pool(4)`.
+
+| Runtime | pids limit none / 128 / 512 | Idle container, host `pids.current` |
+|---|---|---|
+| runc | fork OK, Pool OK (all three) | 1 |
+| runsc | fork OK, Pool OK (all three) | **24** (gVisor's own Sentry and gofer threads) |
+
+**`fork()` and `multiprocessing` work under gVisor**, even at `--pids-limit 128`. The earlier
+fork-bomb result is therefore not evidence that forking is broken. Likely explanation, not
+yet proven: under runsc the host pids limit also counts gVisor's own threads, so once the
+bomb exhausts the limit the sandbox itself dies (exit 2 is a Go runtime fatal exit) before
+the probe can print. That is still containment, but the probe cannot report it. To adopt
+gVisor: raise the host pids limit for runsc (e.g. 256), judge the fork bomb by exit status
+as well as probe output, and re-run the whole suite under runsc on the next bake.
+
 ## Not yet tested
 
-- Why `fork()` fails under runsc here.
+- The fork-bomb explanation above.
 - Vultr account limits (instance count) for a warm pool plus concurrent jobs.
 - NAT gateway pricing and its firewall model (rules are tied to port forwards, so it does not
   look like an egress allowlist).

@@ -11,9 +11,13 @@ breaks the chain.
 
 ```bash
 uv sync
-uv run pytest -q                                   # tamper, forgery and smuggling tests
+uv run pytest -q                                   # tamper, forgery, smuggling and malformed-input tests
 uv run arz-receipt keygen signing.pem              # prints the public key (hex)
 uv run arz-receipt verify receipt.zip --pubkey <hex>
 ```
 
 The signing key lives only on the control plane; the sandbox never sees it.
+
+`verify_bundle` treats its input as untrusted (the `/verify` page accepts uploads): a file
+that is not a zip, a missing or malformed manifest, an unreadable log, or a bundle over
+1,000 entries or 64 MB uncompressed is reported as a failed check, never raised.

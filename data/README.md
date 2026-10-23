@@ -21,5 +21,17 @@ Machine: 1780 rpm, 75 kW motor + pump, 6205-2RS drive-end bearing.
 `uv run data/public/fetch_cwru.py` downloads four Case Western Reserve University bearing
 files (normal, inner race, ball, outer race; same 6205-2RS bearing), checks their pinned
 SHA-256 and converts them to CSV + JSON under `data/raw/cwru/` (git-ignored). CWRU states no
-license, so the raw files are never committed. The normal baseline's sampling rate still has
-to be confirmed from CWRU's documentation.
+license, so the raw files are never committed.
+
+| File | Condition | fs | Source of fs |
+|---|---|---|---|
+| 97 | normal, 0 hp, 1796 rpm | **48 kHz** | Inferred: CWRU's pages never state it. A shaft-harmonic comb test fits 48 kHz (38/40 harmonics) and not 12 kHz (23/40). The same test picks 12 kHz for all three fault files, which validates it. |
+| 105 | inner race 0.007", 0 hp | 12 kHz | "12k Drive End Bearing Fault Data" set |
+| 118 | ball 0.007", 0 hp | 12 kHz | same |
+| 130 | outer race 0.007" @ 6:00, 0 hp | 12 kHz | same |
+
+All channels are acceleration in g. `accel_de_g` is the drive-end housing (6205-2RS) and
+`accel_fe_g` the fan-end housing (6203-2RS, a different bearing). Resample the normal file
+to 12 kHz before comparing it with the fault files. CWRU's "rolling element" defect order
+(4.7135 × fr) is twice the ball spin frequency; the synthetic metadata reports the single
+BSF (2.357 × fr).

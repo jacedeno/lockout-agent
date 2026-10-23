@@ -25,10 +25,17 @@ import scipy.io
 BASE = "https://engineering.case.edu/sites/default/files"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "raw", "cwru")
 
+# CWRU's published defect frequencies for the drive-end bearing, as multiples of running
+# speed. Their "rolling element" order (4.7135) is twice the ball spin frequency: a ball
+# defect strikes both races once per spin. data/synth/generate.py reports the single BSF.
+DEFECT_ORDERS = {"BPFI": 5.4152, "BPFO": 3.5848, "FTF": 0.39828, "2xBSF": 4.7135}
+
 # file id: (label, fault, fs_hz, sha256). Fault files come from the "12k Drive End Bearing
-# Fault Data" set at 0 hp load; fs for the normal baseline must be confirmed from CWRU's docs.
+# Fault Data" set at 0 hp load. CWRU's pages never state the normal baseline's rate; a
+# shaft-harmonic comb test (2026-10-23) fits 48 kHz for file 97 and 12 kHz for the three
+# fault files, so the baseline must be resampled before it is compared with them.
 FILES = {
-    "97": ("normal_0hp", "none", None,
+    "97": ("normal_0hp", "none", 48000,
             "16bf48babcf1c7ac224bc1a81cd9eafdb27e42d5cf559761907e067e8eeadf3c"),
     "105": ("inner_race_007_0hp", "bearing_inner_race", 12000,
             "f80b0ea04fd06b372a0eaec7c056543ea37e4bb4727a5b173d2a5bacd2aa9cab"),
@@ -64,9 +71,11 @@ def main():
         csv = os.path.join(OUT, f"cwru_{fid}_{label}.csv")
         np.savetxt(csv, np.column_stack(cols), delimiter=",", fmt="%.6f", header=header, comments="")
         meta = {"source": f"{BASE}/{fid}.mat", "source_sha256": digest, "label": label, "fault": fault,
-                "fs_hz": fs, "fs_note": None if fs else "confirm from the CWRU normal baseline page",
+                "fs_hz": fs, "fs_source": "CWRU data set name" if fs == 12000 else "inferred from shaft harmonics",
                 "rpm": rpm, "samples": int(len(de)), "units": "g",
-                "bearing": {"model": "6205-2RS", "location": "drive end"}}
+                "channels": {"accel_de_g": "drive-end housing",
+                             **({"accel_fe_g": "fan-end housing (6203-2RS)"} if fe is not None else {})},
+                "bearing": {"model": "6205-2RS JEM SKF", "location": "drive end", "defect_orders": DEFECT_ORDERS}}
         with open(csv[:-4] + ".json", "w") as f:
             json.dump(meta, f, indent=2)
         print(f"{fid}: {label:28s} rpm={rpm} samples={len(de)} sha256={digest[:16]}…")

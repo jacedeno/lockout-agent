@@ -1,3 +1,4 @@
+import io
 import json
 import zipfile
 
@@ -101,3 +102,33 @@ def test_unlisted_artifact(bundle):
     with zipfile.ZipFile(bundle, "a") as z:
         z.writestr("artifacts/extra.txt", "smuggled")
     assert "no unlisted artifacts" in failed(verify_bundle(str(bundle)))
+
+
+def zip_bytes(entries):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n, data in entries.items():
+            z.writestr(n, data)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("source, failing_check", [
+    (b"not a zip", "bundle is a zip"),
+    (zip_bytes({"log.jsonl": ""}), "receipt.json readable"),
+    (zip_bytes({"receipt.json": json.dumps({"manifest": {"format": "arz-receipt/1"}, "signature": ""})}),
+     "manifest structure"),
+])
+def test_malformed_bundles_are_reported_not_raised(source, failing_check):
+    report = verify_bundle(source)
+    assert not report["ok"] and failed(report)[-1] == failing_check
+
+
+def test_unreadable_log_is_reported(bundle):
+    rewrite(bundle, "log.jsonl", lambda b: b"\xff\xfe not json\n")
+    assert "log readable" in failed(verify_bundle(str(bundle)))
+
+
+def test_bundle_size_cap(bundle, monkeypatch):
+    import arz_receipts.bundle as b
+    monkeypatch.setattr(b, "MAX_ENTRIES", 2)
+    assert failed(verify_bundle(str(bundle))) == ["bundle size"]
