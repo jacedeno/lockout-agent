@@ -39,8 +39,8 @@ python3 -I spikes/vultr/spike.py cleanup
    in, so the drop policy is active from early boot and nothing is installed at job time.
 4. **Metadata is reachable before the lockdown** (cloud-init needs it). User-data must never
    carry a secret; it only carries the per-job public SSH key.
-5. Per-job latency budget: ~2–2.5 min to a ready sandbox from a stock image. A snapshot boot
-   still needs measuring.
+5. Per-job latency budget: ~2–2.5 min to a ready sandbox from a stock image; ~4 min from the
+   snapshot (measured below).
 
 ## Snapshot bake and boot test — 2026-10-22/23
 
