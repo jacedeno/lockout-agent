@@ -135,10 +135,19 @@ def cmd_boot_test(args):
         if wait_ssh(sb_ssh, "sandbox via jump", timeout=600) is None:
             raise RuntimeError("sandbox never accepted SSH over the VPC")
         report["sandbox_create_to_ssh_s"] = round(time.monotonic() - t0)
-        _, out, _ = run_ssh(sb_ssh, "systemctl is-active arz-lockdown nftables docker; "
-                                    "until systemctl is-active -q arz-lockdown; do sleep 1; done; "
-                                    "nft list chain inet arz output | grep -c 169.254 || true; cat /etc/arz/image.json")
+        _, out, _ = run_ssh(sb_ssh, r"""
+for i in $(seq 1 120); do systemctl is-active -q arz-lockdown && break; sleep 2; done
+echo "## units";        systemctl is-active arz-lockdown nftables docker cloud-final
+echo "## cloud-init";   cloud-init status --long 2>&1 | head -8
+echo "## metadata rule present"; nft list chain inet arz output | grep -c 169.254 || true
+echo "## lockdown";     journalctl -b -u arz-lockdown --no-pager | tail -8
+echo "## cloud-final";  journalctl -b -u cloud-final --no-pager | tail -15
+echo "## slowest units"; systemd-analyze blame 2>/dev/null | head -12
+echo "## failed";       systemctl --failed --no-legend
+cat /etc/arz/image.json
+""", timeout=420)
         report["sandbox_state"] = out
+        log("sandbox state:\n" + out)
         report["sandbox_ready_s"] = round(time.monotonic() - t0)
         log(f"sandbox ready {report['sandbox_ready_s']}s after create")
 

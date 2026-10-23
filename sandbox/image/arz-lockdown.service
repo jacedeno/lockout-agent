@@ -9,4 +9,6 @@ ExecStart=/usr/sbin/nft -f /etc/arz/firewall-strict.nft
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target
+# Not multi-user.target: cloud-final.service is ordered after multi-user.target, so that
+# would be an ordering cycle and systemd silently drops this unit (seen 2026-10-23).
+WantedBy=cloud-init.target

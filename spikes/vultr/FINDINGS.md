@@ -1,7 +1,7 @@
 # Vultr spike findings — 2026-10-22
 
 Account: a Vultr organization account. Region `dfw`, plan `vc2-1c-1gb`, Ubuntu 24.04 (`os_id` 2284).
-Total cost of all three runs: $0.03. Every resource was deleted and verified gone afterwards.
+Total cost of all runs so far: $0.13. Every resource was deleted and verified gone afterwards.
 
 Run with the key from `$ARZ_SECRETS_DIR/vultr.env` loaded into the environment:
 
@@ -42,9 +42,55 @@ python3 -I spikes/vultr/spike.py cleanup
 5. Per-job latency budget: ~2–2.5 min to a ready sandbox from a stock image. A snapshot boot
    still needs measuring.
 
+## Snapshot bake and boot test — 2026-10-22/23
+
+`spikes/vultr/bake.py build` then `boot-test --snapshot <id>`. Current snapshot:
+`a48eff26-96f8-4df1-84d0-47e78959aa94` (2.3 GB compressed; the first bake was deleted).
+
+| Measure | Result |
+|---|---|
+| `build.sh` on a fresh instance | 3.5 min |
+| Snapshot creation | 11–21 min |
+| Snapshot boot: create → `active` | **186–196 s** (stock image: 37–90 s) |
+| `active` → SSH over the VPC | ~41–49 s |
+| **Create → ready sandbox** | **~4 min** |
+| `arz-lockdown` after cloud-init | runs ~1 s after `cloud-final`; metadata rule gone |
+
+Escape probes on the booted sandbox (`redteam/run.py --host-probes`, 10 s timeout):
+
+| Probe | Docker (runc) | gVisor (runsc) |
+|---|---|---|
+| net_egress, metadata, secrets, fs_write, privilege | contained | contained |
+| fork_bomb | contained (stopped at 127 processes) | **probe crashed after its first fork (exit 2, no output)** |
+| mem_bomb | OOM-killed | OOM-killed |
+| timeout | killed at 10 s | killed at 10 s |
+| host_egress, host_metadata (VM layer) | contained | contained |
+
+**10/10 contained under Docker (runc).**
+
+### Bugs found and fixed
+
+- `arz-lockdown.service` first shipped with `WantedBy=multi-user.target`. Ubuntu's
+  `cloud-final.service` is ordered *after* `multi-user.target`, so that was an ordering cycle and
+  systemd silently dropped the unit: the metadata endpoint stayed reachable from the VM. Now
+  `WantedBy=cloud-init.target`; verified.
+- The secrets probe flagged the base image's `GPG_KEY` (a public key ID) and the empty `/home`;
+  the image now blanks `GPG_KEY` and the probe ignores empty directories.
+
+### Consequences for the design
+
+1. **Runtime: Docker (runc) is primary.** gVisor breaks `fork()` in this setup, so any job that
+   forks (including Python `multiprocessing`) would fail under it. It stays optional and
+   unproven.
+2. **Four minutes from create to ready is too slow for a live demo per job.** Options:
+   a **warm pool of one** pre-booted sandbox, destroyed after its job and replaced in the
+   background (user-perceived wait ~0, cost ~$0.007/h), or stock image + no snapshot (faster
+   boot, but packages would need egress at job time — rejected).
+3. Snapshot storage is a small ongoing cost; keep one current snapshot and delete old ones.
+
 ## Not yet tested
 
-- Boot time from a custom snapshot.
-- Docker + container lockdown flags inside the sandbox (test locally with Podman first).
+- Why `fork()` fails under runsc here.
+- Vultr account limits (instance count) for a warm pool plus concurrent jobs.
 - NAT gateway pricing and its firewall model (rules are tied to port forwards, so it does not
   look like an egress allowlist).
