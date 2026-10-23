@@ -1,0 +1,12 @@
+[Unit]
+Description=Drop the boot-time metadata allowance once cloud-init has finished
+After=cloud-final.service
+Wants=cloud-final.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/arz/firewall-strict.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

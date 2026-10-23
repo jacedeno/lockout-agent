@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Run one job step inside a locked container and print a JSON summary.
+
+Job directory layout (created by the control plane):
+  <job>/input/   read-only to the container
+  <job>/code/    read-only to the container; holds the script to run
+  <job>/out/     the only writable mount; artifacts land here
+
+The summary records the exact container flags, the image ID, timings, exit code,
+OOM/timeout status and the SHA-256 of stdout, stderr and every artifact, so the
+control plane can recompute and compare them after pulling the files.
+"""
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import uuid
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--job", required=True, help="job directory")
+    p.add_argument("--script", required=True, help="file name inside <job>/code/")
+    p.add_argument("--timeout", type=int, default=60, help="wall-clock seconds before the container is killed")
+    p.add_argument("--memory", default="512m")
+    p.add_argument("--pids", type=int, default=128)
+    p.add_argument("--cpus", default="1")
+    p.add_argument("--engine", default="docker", choices=("docker", "podman"))
+    p.add_argument("--runtime", default=None, help="OCI runtime, e.g. runsc for gVisor")
+    p.add_argument("--image", default="arz-runner:latest")
+    args = p.parse_args()
+
+    job = os.path.abspath(args.job)
+    out = os.path.join(job, "out")
+    os.makedirs(out, exist_ok=True)
+    try:
+        os.chown(out, 65534, 65534)  # the container's user; needs root on the host
+    except PermissionError:
+        os.chmod(out, 0o777)  # rootless engines map the user elsewhere
+    name = f"arz-{uuid.uuid4().hex[:12]}"
+    flags = [
+        "--network", "none",
+        "--read-only",
+        "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
+        "--memory", args.memory, "--memory-swap", args.memory,
+        "--pids-limit", str(args.pids),
+        "--cpus", args.cpus,
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--user", "65534:65534",
+        "-v", f"{job}/input:/work/input:ro",
+        "-v", f"{job}/code:/work/code:ro",
+        "-v", f"{out}:/work/out:rw",
+    ]
+    if args.runtime:
+        flags += ["--runtime", args.runtime]
+    cmd = [args.engine, "run", "--name", name, *flags, args.image, f"/work/code/{args.script}"]
+
+    stdout_path, stderr_path = os.path.join(job, f"{name}.stdout"), os.path.join(job, f"{name}.stderr")
+    started, timed_out = now(), False
+    with open(stdout_path, "wb") as so, open(stderr_path, "wb") as se:
+        proc = subprocess.Popen(cmd, stdout=so, stderr=se)
+        try:
+            proc.wait(timeout=args.timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            subprocess.run([args.engine, "kill", name], capture_output=True)
+            proc.wait()
+    ended = now()
+
+    state = json.loads(subprocess.run([args.engine, "inspect", name], capture_output=True, text=True).stdout or "[{}]")[0]
+    subprocess.run([args.engine, "rm", "-f", name], capture_output=True)
+    image_id = subprocess.run([args.engine, "image", "inspect", "--format", "{{.Id}}", args.image],
+                              capture_output=True, text=True).stdout.strip()
+
+    artifacts = []
+    for root, _, files in os.walk(out):
+        for f in sorted(files):
+            path = os.path.join(root, f)
+            artifacts.append({"path": os.path.relpath(path, job), "bytes": os.path.getsize(path),
+                              "sha256": sha256_file(path)})
+
+    summary = {
+        "container": name,
+        "engine": args.engine,
+        "runtime": args.runtime or "default",
+        "image": args.image,
+        "image_id": image_id,
+        "command": cmd,
+        "script": {"name": args.script, "sha256": sha256_file(os.path.join(job, "code", args.script))},
+        "limits": {"timeout_s": args.timeout, "memory": args.memory, "pids": args.pids, "cpus": args.cpus},
+        "started_at": started,
+        "ended_at": ended,
+        "exit_code": state.get("State", {}).get("ExitCode", proc.returncode),
+        "oom_killed": bool(state.get("State", {}).get("OOMKilled", False)),
+        "timed_out": timed_out,
+        "stdout": {"path": os.path.relpath(stdout_path, job), "sha256": sha256_file(stdout_path)},
+        "stderr": {"path": os.path.relpath(stderr_path, job), "sha256": sha256_file(stderr_path)},
+        "artifacts": artifacts,
+    }
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

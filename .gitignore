@@ -17,3 +17,4 @@ data/raw/
 data/cache/
 runs/
 *.receipt.zip
+data/synth/out/
