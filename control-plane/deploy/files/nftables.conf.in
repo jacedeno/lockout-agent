@@ -1,0 +1,31 @@
+#!/usr/sbin/nft -f
+# Control plane host firewall (installed by control-plane/deploy/provision.sh).
+#
+# The Vultr firewall group already limits public inbound (80/443 from anywhere, 22 from
+# the operator's addresses). Firewall groups do not filter the VPC, so this layer is what stops a
+# sandbox from opening a connection to the control plane: replies to connections the control
+# plane opened are allowed, anything new from the VPC is dropped.
+
+flush ruleset
+
+table inet arz {
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		iif "lo" accept
+		ct state established,related accept
+		ct state invalid drop
+
+		udp sport 67 udp dport 68 accept comment "DHCP replies"
+		ip saddr @VPC_CIDR@ counter drop comment "sandboxes: no new connections to the control plane"
+
+		tcp dport { 22, 80, 443 } accept
+		icmp type { echo-request, destination-unreachable, time-exceeded } limit rate 10/second accept
+
+		counter drop
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+	}
+}

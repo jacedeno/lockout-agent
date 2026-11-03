@@ -1,0 +1,20 @@
+# Control plane reverse proxy (installed by control-plane/deploy/provision.sh).
+# Placeholder until the app is deployed: /healthz answers, everything else returns a notice.
+
+@HOST@ {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle {
+		respond "Agent Rush control plane: online. The app is not deployed yet." 200
+	}
+}
