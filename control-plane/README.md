@@ -27,7 +27,25 @@ how a config change ships. Credentials are read from `the secrets directory` (`v
 | Host firewall | nftables (ufw disabled): drops every new connection from the VPC, so a sandbox can never open one to the control plane |
 | URL | `https://agentrush.geekendzone.net` — Cloudflare A record, **DNS-only**; Caddy gets its own Let's Encrypt certificate |
 | SSH | keys only (`sshd_config.d/00-arz.conf`) |
-| Secrets on the VM | `/etc/arz/control-plane.env` (root, 0600): `VULTR_API_KEY` |
+| Secrets on the VM | `/etc/arz/control-plane.env` (root, 0600): `VULTR_API_KEY` and the sandbox settings |
+
+### Jobs (`arz/`)
+
+`arz.vultr` is a stdlib Vultr client; `arz.sandbox.Sandbox` is one ephemeral VM per job: a
+per-job SSH key, created from the snapshot on `arz-vpc` with the empty `arz-sandbox` firewall
+group and no user-data, reached over the VPC, and deleted with a verified 404 on exit whatever
+happened inside. Settings come from `/etc/arz/control-plane.env` (`ARZ_SNAPSHOT_ID`,
+`ARZ_VPC_ID`, `ARZ_SANDBOX_FIREWALL_ID`, `ARZ_REGION`, `ARZ_SANDBOX_PLAN`).
+
+The `hello` job is the end-to-end check (provision → upload → run → pull → recompute every
+SHA-256 → delete → 404). Reports land in `/var/lib/arz/jobs/<job-id>/report.json`:
+
+```bash
+ssh -i $ARZ_SECRETS_DIR/vultr-arz-control-plane.key root@<ip> \
+  'cd /opt/arz/app && set -a && . /etc/arz/control-plane.env && set +a && python3 -s -m arz.hello'
+```
+
+A new snapshot ships with `deploy.py up --snapshot <id>`.
 
 ### Sandbox reaper
 

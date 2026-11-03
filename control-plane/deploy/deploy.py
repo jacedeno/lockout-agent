@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """Deploy the control plane VM (idempotent: re-run `up` to re-provision).
 
-    python3 -I control-plane/deploy/deploy.py up --allow 203.0.113.10/32 203.0.113.11/32
+    python3 -I control-plane/deploy/deploy.py up --allow 203.0.113.10/32 203.0.113.11/32 [--snapshot ID]
     python3 -I control-plane/deploy/deploy.py status
     python3 -I control-plane/deploy/deploy.py destroy [--vpc]
 
 What it touches:
 - Vultr: instance `arz-control-plane` (vc2-1c-2gb, Ubuntu 24.04, dfw) attached to VPC `arz-vpc`
   (10.50.0.0/24, shared with the sandboxes), firewall group `arz-control-plane` (80/443 from
-  anywhere, 22 from --allow) and SSH key `arz-control-plane`.
+  anywhere, 22 from --allow) and SSH key `arz-control-plane`; plus the empty firewall group
+  `arz-sandbox` every sandbox gets (no rules: no public inbound at all).
 - Cloudflare: a DNS-only A record for HOST, so Caddy serves its own Let's Encrypt certificate.
 - the secrets directory: vultr-arz-control-plane.env (resource IDs, IPs) and vultr-arz-control-plane.key.
-- The VM: provision.sh (swap, SSH keys-only, nftables, Caddy, sandbox reaper) and
-  /etc/arz/control-plane.env (root-only; the Vultr API key for the reaper).
+- The VM: provision.sh (swap, SSH keys-only, nftables, Caddy, sandbox reaper, the `arz` package
+  in /opt/arz/app) and /etc/arz/control-plane.env (root-only: the Vultr API key plus the
+  sandbox settings: snapshot, VPC, firewall group, region, plan).
 
 Credentials come from the secrets directory: vultr.env and cloudflare.env.
 `destroy` keeps the VPC unless --vpc is given (sandboxes attach to it).
@@ -35,6 +37,8 @@ ENV_FILE = os.path.join(SECRETS, "vultr-arz-control-plane.env")
 KEY_FILE = os.path.join(SECRETS, "vultr-arz-control-plane.key")
 LABEL = "arz-control-plane"
 VPC_LABEL = "arz-vpc"
+SANDBOX_FW_LABEL = "arz-sandbox"
+SANDBOX_PLAN = "vc2-1c-1gb"
 VPC_SUBNET, VPC_MASK = "10.50.0.0", 24
 REGION = "dfw"
 PLAN = "vc2-1c-2gb"
@@ -173,6 +177,15 @@ def ensure_firewall(allow):
     return fw
 
 
+def ensure_sandbox_firewall():
+    found = find("/firewalls", "firewall_groups", "description", SANDBOX_FW_LABEL)
+    if found:
+        return found["id"]
+    fw = vultr("POST", "/firewalls", {"description": SANDBOX_FW_LABEL})[1]["firewall_group"]["id"]
+    log(f"sandbox firewall group {fw}: no rules (drops all public inbound)")
+    return fw
+
+
 def ensure_vpc():
     found = find("/vpcs", "vpcs", "description", VPC_LABEL)
     if found:
@@ -198,6 +211,10 @@ def bundle():
     subs = {"@HOST@": HOST, "@VPC_CIDR@": f"{VPC_SUBNET}/{VPC_MASK}"}
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
+        pkg = os.path.join(HERE, "..", "arz")
+        for name in sorted(os.listdir(pkg)):
+            if name.endswith(".py"):
+                tar.add(os.path.join(pkg, name), arcname=f"app/arz/{name}")
         for name in sorted(os.listdir(os.path.join(HERE, "files"))):
             path = os.path.join(HERE, "files", name)
             if not os.path.isfile(path) or name.endswith(".pyc"):
@@ -228,8 +245,13 @@ def check_https(timeout=300):
 
 def cmd_up(args):
     env = read_env(ENV_FILE)
+    snapshot = args.snapshot or env.get("ARZ_SNAPSHOT_ID")
+    if not snapshot:
+        raise SystemExit("--snapshot is required the first time (the sandbox snapshot ID)")
+    vultr("GET", f"/snapshots/{snapshot}")  # fail early on a wrong or deleted snapshot
     key_id = ensure_ssh_key()
     fw = ensure_firewall(args.allow)
+    sandbox_fw = ensure_sandbox_firewall()
     vpc = ensure_vpc()
     inst = find("/instances", "instances", "label", LABEL)
     if inst is None:
@@ -239,7 +261,8 @@ def cmd_up(args):
             "sshkey_id": [key_id], "firewall_group_id": fw, "attach_vpc": [vpc]})[1]["instance"]
         log(f"created instance {inst['id']} ({PLAN}, {REGION})")
     env.update({"HOST": HOST, "VULTR_INSTANCE_ID": inst["id"], "VULTR_FIREWALL_ID": fw,
-                "VULTR_SSHKEY_ID": key_id, "VULTR_VPC_ID": vpc})
+                "VULTR_SSHKEY_ID": key_id, "VULTR_VPC_ID": vpc, "ARZ_SANDBOX_FIREWALL_ID": sandbox_fw,
+                "ARZ_SNAPSHOT_ID": snapshot})
     write_env(ENV_FILE, env)
 
     inst = wait_active(inst["id"])
@@ -255,7 +278,10 @@ def cmd_up(args):
             input=bundle(), timeout=120)
     if p.returncode:
         raise RuntimeError(f"upload failed: {p.stderr.decode()[-500:]}")
-    cp_env = f"VULTR_API_KEY={VULTR['VULTR_API_KEY']}\nVULTR_API_URL={API}\n".encode()
+    cp_env = "".join(f"{k}={v}\n" for k, v in {
+        "VULTR_API_KEY": VULTR["VULTR_API_KEY"], "VULTR_API_URL": API,
+        "ARZ_REGION": REGION, "ARZ_SANDBOX_PLAN": SANDBOX_PLAN, "ARZ_SNAPSHOT_ID": snapshot,
+        "ARZ_VPC_ID": vpc, "ARZ_SANDBOX_FIREWALL_ID": sandbox_fw}.items()).encode()
     p = ssh(ip, "install -d -m 0700 /etc/arz && umask 077 && cat > /etc/arz/control-plane.env", input=cp_env, timeout=60)
     if p.returncode:
         raise RuntimeError(f"env upload failed: {p.stderr.decode()[-500:]}")
@@ -305,6 +331,7 @@ def cmd_destroy(args):
         cloudflare("DELETE", f"/zones/{zone_id()}/dns_records/{env['CLOUDFLARE_RECORD_ID']}")
         log(f"DNS record for {HOST} deleted")
     for path, key, field, value in (("/firewalls", "firewall_groups", "description", LABEL),
+                                    ("/firewalls", "firewall_groups", "description", SANDBOX_FW_LABEL),
                                     ("/ssh-keys", "ssh_keys", "name", LABEL)):
         found = find(path, key, field, value)
         if found:
@@ -332,6 +359,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     up = sub.add_parser("up")
     up.add_argument("--allow", nargs="+", required=True, help="CIDRs allowed to SSH (the operator's addresses)")
+    up.add_argument("--snapshot", default=None, help="sandbox snapshot ID (kept from the last run if omitted)")
     sub.add_parser("status")
     d = sub.add_parser("destroy")
     d.add_argument("--vpc", action="store_true", help="also delete the VPC")

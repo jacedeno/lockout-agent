@@ -48,6 +48,14 @@ caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 systemctl enable caddy >/dev/null
 systemctl reload-or-restart caddy
 
+# Control plane package (jobs, sandbox lifecycle) and job storage.
+install -d -m 0755 /opt/arz
+rm -rf /opt/arz/app.new
+cp -r app /opt/arz/app.new
+rm -rf /opt/arz/app
+mv /opt/arz/app.new /opt/arz/app
+install -d -m 0700 /var/lib/arz /var/lib/arz/jobs
+
 # Sandbox reaper.
 install -d -m 0755 /opt/arz
 install -m 0755 arz-reaper.py /opt/arz/arz-reaper.py
