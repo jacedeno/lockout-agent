@@ -72,14 +72,33 @@ class WarmPool:
 
     # -- internals -----------------------------------------------------------------------------
     def _cleanup_leftovers(self):
+        """Delete warm sandboxes left by a previous process, in the background.
+
+        A sandbox that was still booting when that process stopped answers DELETE with
+        409 "Server is currently locked" until it is active, so keep retrying (up to ~10 min)
+        instead of giving up; the reaper's 60-minute limit stays the backstop.
+        """
         try:
             rows = vultr.call("GET", f"/instances?tag={WARM_TAG}&per_page=100")[1].get("instances", [])
-            for inst in rows:
-                if TAG in inst.get("tags", []) and inst.get("label", "").startswith(TAG):
-                    vultr.delete_verified(inst["id"])
-                    self.log(f"removed leftover warm sandbox {inst['label']}")
-        except Exception as e:  # noqa: BLE001 - the reaper is the backstop
-            self.log(f"leftover cleanup failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            self.log(f"leftover listing failed: {e}")
+            return
+        leftovers = [(i["id"], i["label"]) for i in rows
+                     if TAG in i.get("tags", []) and i.get("label", "").startswith(TAG)]
+
+        def remove(iid, label):
+            for _ in range(40):
+                try:
+                    vultr.delete_verified(iid)
+                    self.log(f"removed leftover warm sandbox {label}")
+                    return
+                except Exception as e:  # noqa: BLE001 - usually 409 while it is still booting
+                    last = e
+                    time.sleep(15)
+            self.log(f"could not remove leftover {label}: {last}; the reaper will")
+
+        for iid, label in leftovers:
+            threading.Thread(target=remove, args=(iid, label), name=f"cleanup-{label}", daemon=True).start()
 
     def _boot(self):
         sb = Sandbox(f"warm-{time.strftime('%H%M%S')}-{secrets.token_hex(2)}", log=self.log, warm=True)
