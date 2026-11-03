@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -133,10 +134,17 @@ class Sandbox:
                  input=buf.getvalue())
         self.event("job_uploaded", files={k: hashlib.sha256(v).hexdigest() for k, v in files.items()})
 
+    def put(self, name, data):
+        """Add one file (e.g. code/analyze_2.py) to the existing job directory."""
+        if name.startswith("/") or ".." in name.split("/"):
+            raise ValueError(f"bad job path {name!r}")
+        self.ssh(f"umask 022 && cat > {REMOTE}/{shlex.quote(name)}", input=data)
+        self.event("file_added", path=name, sha256=hashlib.sha256(data).hexdigest(), bytes=len(data))
+
     def run(self, script, timeout=60, extra_args=""):
-        """Run code/<script> in the locked container; returns arz-run's JSON summary."""
-        p = self.ssh(f"{RUNNER} --job {REMOTE} --script {script} --timeout {int(timeout)} {extra_args}",
-                     timeout=timeout + 120)
+        """Run code/<script> in the locked container with a fresh out/; returns arz-run's summary."""
+        p = self.ssh(f"rm -rf {REMOTE}/out {REMOTE}/arz-*.std* && {RUNNER} --job {REMOTE} "
+                     f"--script {shlex.quote(script)} --timeout {int(timeout)} {extra_args}", timeout=timeout + 120)
         summary = json.loads(p.stdout)
         self.event("step_ran", script=script, script_sha256=summary["script"]["sha256"],
                    command=summary["command"], limits=summary["limits"], image_id=summary["image_id"],

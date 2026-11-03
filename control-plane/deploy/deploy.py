@@ -217,6 +217,8 @@ def bundle():
     trees = [(os.path.join(HERE, "..", "arz"), "app/arz"),
              (os.path.join(REPO, "receipts", "pyproject.toml"), "pkg/receipts/pyproject.toml"),
              (os.path.join(REPO, "receipts", "src"), "pkg/receipts/src"),
+             (os.path.join(REPO, "toolkit", "pyproject.toml"), "pkg/vibkit/pyproject.toml"),
+             (os.path.join(REPO, "toolkit", "src"), "pkg/vibkit/src"),
              (os.path.join(REPO, "data", "synth", "generate.py"), "synth/generate.py"),
              (os.path.join(REPO, "data", "synth", "SHA256SUMS.expected"), "synth/SHA256SUMS.expected")]
     buf = io.BytesIO()
@@ -292,7 +294,10 @@ def cmd_up(args):
         "ARZ_VPC_ID": vpc, "ARZ_SANDBOX_FIREWALL_ID": sandbox_fw,
         "ARZ_RECEIPT_KEY": "/etc/arz/receipt-signing.pem",
         "ARZ_RECEIPT_PUBKEY": open(RECEIPT_PUB).read().strip(),
-        "ARZ_DATASETS": "/opt/arz/datasets/synth"}.items()).encode()
+        "ARZ_DATASETS": "/opt/arz/datasets/synth",
+        "VULTR_INFERENCE_API_KEY": VULTR["VULTR_INFERENCE_API_KEY"],
+        "VULTR_INFERENCE_URL": VULTR.get("VULTR_INFERENCE_URL", "https://api.vultrinference.com/v1"),
+        "ARZ_MODEL": "qwen3.8-flash-next", "ARZ_MODEL_ESCALATION": "glm-5.3"}.items()).encode()
     p = ssh(ip, "install -d -m 0700 /etc/arz && umask 077 && cat > /etc/arz/control-plane.env", input=cp_env, timeout=60)
     if p.returncode:
         raise RuntimeError(f"env upload failed: {p.stderr.decode()[-500:]}")

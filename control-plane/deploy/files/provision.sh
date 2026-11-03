@@ -56,10 +56,12 @@ rm -rf /opt/arz/app
 mv /opt/arz/app.new /opt/arz/app
 install -d -m 0700 /var/lib/arz /var/lib/arz/jobs
 
-# Job runtime: a venv with the receipts library (Ed25519 via cryptography) and numpy for the
-# dataset generator. Jobs run with /opt/arz/venv/bin/python -m arz.<job>.
+# Job runtime: a venv with the receipts library (Ed25519 via cryptography), and vibkit with the
+# same numpy/scipy pins as the sandbox image, for the control plane's own reference diagnosis.
+# Jobs run with /opt/arz/venv/bin/python -m arz.<job>.
 [ -x /opt/arz/venv/bin/python ] || python3 -m venv /opt/arz/venv
-/opt/arz/venv/bin/pip install -q --disable-pip-version-check numpy==2.1.3 ./pkg/receipts
+/opt/arz/venv/bin/pip install -q --disable-pip-version-check numpy==2.1.3 scipy==1.14.1 ./pkg/receipts
+/opt/arz/venv/bin/pip install -q --disable-pip-version-check --no-deps --force-reinstall ./pkg/vibkit
 
 # Synthetic datasets, regenerated deterministically and checked against the repo's hashes.
 rm -rf /opt/arz/datasets/synth.new
