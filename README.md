@@ -1,8 +1,11 @@
 # vultr-agent-rush
 
-Development repo for the lablab.ai **Vultr: Agent Rush** hackathon (Nov 3–8, 2026),
-Challenge 1 — **Blast Radius Zero**. The final submission repo name is decided before
-Nov 8.
+Development repo for **Lockout**, the lablab.ai **Vultr: Agent Rush** hackathon entry
+(Nov 3–8, 2026), Challenge 1 — Blast Radius Zero. Live at https://agentrush.geekendzone.net.
+
+The name is the maintenance practice: before working on a machine you isolate every energy
+source and **verify zero energy**. Lockout does the same with an AI agent: it isolates a
+throwaway VM, does the work inside it, then destroys it and verifies the 404.
 
 **What it is:** a sandboxed reliability-diagnostics agent. Give it a vibration dataset; it
 plans the job, writes the analysis code, runs it inside a throwaway Vultr VM that has no
