@@ -44,8 +44,9 @@ python3 -I spikes/vultr/spike.py cleanup
 
 ## Snapshot bake and boot test — 2026-10-22/23
 
-`spikes/vultr/bake.py build` then `boot-test --snapshot <id>`. Current snapshot:
-`a48eff26-96f8-4df1-84d0-47e78959aa94` (2.3 GB compressed; the first bake was deleted).
+`spikes/vultr/bake.py build` then `boot-test --snapshot <id>`. Current snapshot: see the
+2026-11-03 re-bake below. This section's snapshot was `a48eff26-96f8-4df1-84d0-47e78959aa94`
+(2.3 GB compressed; the first bake was deleted).
 
 | Measure | Result |
 |---|---|
@@ -107,6 +108,29 @@ bomb exhausts the limit the sandbox itself dies (exit 2 is a Go runtime fatal ex
 the probe can print. That is still containment, but the probe cannot report it. To adopt
 gVisor: raise the host pids limit for runsc (e.g. 256), judge the fork bomb by exit status
 as well as probe output, and re-run the whole suite under runsc on the next bake.
+
+## Re-bake with the 2026-10-23 hardening — 2026-11-03
+
+**Current snapshot: `3e8ce28f-3c1a-4d59-96b8-d092f9a5b839`** (`arz-sandbox 2026-11-03`, 2.36 GB
+compressed; build 2 min, snapshot 7.3 min). Baked for the control plane at `10.50.0.3`.
+
+Changes: sandbox nftables accepts SSH only from the control plane's VPC address and no longer
+lets anything new out to the VPC; SSH keys only; `arz-run` lists regular files only and caps
+artifacts and stdout/stderr; new `host_control_plane` probe. The boot test now runs through
+the real control plane (`arz-vpc`) instead of a throwaway jump host.
+
+| Measure | Result |
+|---|---|
+| Create → `active` | 202 s |
+| Create → SSH from the control plane over the VPC | 232 s |
+| **Create → ready sandbox** | **237 s** (unchanged: ~4 min) |
+| `sshd -T` | `passwordauthentication no`, `kbdinteractiveauthentication no`, `permitrootlogin without-password` |
+| nftables input | `ip saddr 10.50.0.3 tcp dport 22 accept` (no /24) |
+| nftables output | lo, established/related, DHCP; metadata rule gone after lockdown |
+| Escape probes, Docker (runc) | **11/11 contained**, `host_control_plane` included (22/80/443/8000: no answer) |
+| Escape probes, gVisor (runsc) | 10/11: `fork_bomb` still reported as a failure (`spawned 1`), the judging problem described in the gVisor re-test; gVisor stays optional |
+| Control plane layer alone (sandbox firewall flushed) | **contained**: 22/80/443/8000 all silently dropped by the control plane's nftables |
+| Teardown | instance 404 after 1 s; firewall group and SSH key deleted |
 
 ## Not yet tested
 

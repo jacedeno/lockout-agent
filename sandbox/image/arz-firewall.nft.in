@@ -1,7 +1,8 @@
 #!/usr/sbin/nft -f
 # Sandbox VM firewall. Loaded by nftables.service at early boot, before any network is up.
-# Default-drop both ways. Allowed: loopback, replies, SSH in from the control plane's VPC,
-# DHCP, and (boot phase only) the metadata endpoint cloud-init needs. arz-lockdown.service
+# Default-drop both ways. Allowed: loopback, replies, SSH in from the control plane's VPC
+# address only, DHCP, and (boot phase only) the metadata endpoint cloud-init needs. Nothing new
+# goes out to the VPC: the sandbox only ever answers the control plane's own connection. arz-lockdown.service
 # reloads this file without the metadata rule once cloud-init has finished.
 flush ruleset
 
@@ -10,7 +11,7 @@ table inet arz {
     type filter hook input priority 0; policy drop;
     iif "lo" accept
     ct state established,related accept
-    ip saddr @VPC_SUBNET@ tcp dport 22 accept
+    ip saddr @CONTROL_PLANE_IP@ tcp dport 22 accept
     udp sport 67 udp dport 68 accept
   }
 
@@ -18,7 +19,6 @@ table inet arz {
     type filter hook output priority 0; policy drop;
     oif "lo" accept
     ct state established,related accept
-    ip daddr @VPC_SUBNET@ accept
     udp sport 68 udp dport 67 accept
     @METADATA_RULE@
   }

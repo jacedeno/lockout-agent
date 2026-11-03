@@ -9,6 +9,11 @@ Job directory layout (created by the control plane):
 The summary records the exact container flags, the image ID, timings, exit code,
 OOM/timeout status and the SHA-256 of stdout, stderr and every artifact, so the
 control plane can recompute and compare them after pulling the files.
+
+The container controls <job>/out/, so nothing in it is trusted: only regular files are
+listed and hashed (lstat, O_NOFOLLOW; links, FIFOs, sockets and devices are skipped and
+reported), the artifact count and total size are capped, and only the first
+--max-stream-bytes of stdout and stderr are kept. Every cut is recorded in the summary.
 """
 
 import argparse
@@ -16,17 +21,63 @@ import datetime
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
+import threading
 import uuid
 
 
 def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
+    """SHA-256 of a regular file, never following a symlink or blocking on a FIFO."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise ValueError(f"not a regular file: {path}")
+        h = hashlib.sha256()
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def pump(src, path, cap, stats):
+    """Copy a stream to path, keeping only the first cap bytes but draining all of it."""
+    kept = seen = 0
+    with open(path, "wb") as f:
+        for chunk in iter(lambda: src.read(65536), b""):
+            seen += len(chunk)
+            if kept < cap:
+                part = chunk[:cap - kept]
+                f.write(part)
+                kept += len(part)
+    stats.update(bytes_seen=seen, bytes_kept=kept, truncated=seen > kept)
+
+
+def collect_artifacts(out, job, max_count, max_bytes):
+    """List and hash regular files under out, within the count and size caps."""
+    artifacts, skipped, total = [], [], 0
+    for root, dirs, files in os.walk(out, followlinks=False):
+        dirs.sort()
+        for name in sorted(files + dirs):
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, job)
+            st = os.lstat(path)
+            if stat.S_ISDIR(st.st_mode):
+                continue  # os.walk descends into real directories itself
+            if not stat.S_ISREG(st.st_mode):
+                skipped.append({"path": rel, "reason": "not a regular file"})
+                continue
+            if len(artifacts) >= max_count or total + st.st_size > max_bytes:
+                skipped.append({"path": rel, "bytes": st.st_size, "reason": "over the artifact cap"})
+                continue
+            try:
+                digest = sha256_file(path)
+            except (OSError, ValueError) as e:
+                skipped.append({"path": rel, "reason": f"unreadable: {e.__class__.__name__}"})
+                continue
+            total += st.st_size
+            artifacts.append({"path": rel, "bytes": st.st_size, "sha256": digest})
+    return artifacts, skipped, total
 
 
 def now():
@@ -44,6 +95,9 @@ def main():
     p.add_argument("--engine", default="docker", choices=("docker", "podman"))
     p.add_argument("--runtime", default=None, help="OCI runtime, e.g. runsc for gVisor")
     p.add_argument("--image", default="arz-runner:latest")
+    p.add_argument("--max-stream-bytes", type=int, default=1 << 20, help="stdout/stderr bytes kept (each)")
+    p.add_argument("--max-artifacts", type=int, default=64)
+    p.add_argument("--max-artifact-bytes", type=int, default=50 << 20, help="total artifact bytes listed")
     args = p.parse_args()
 
     job = os.path.abspath(args.job)
@@ -68,20 +122,29 @@ def main():
         "-v", f"{job}/code:/work/code:ro",
         "-v", f"{out}:/work/out:rw",
     ]
+    if args.engine == "docker":
+        # The daemon also logs the container's output to disk; bound that copy too.
+        flags += ["--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1"]
     if args.runtime:
         flags += ["--runtime", args.runtime]
     cmd = [args.engine, "run", "--name", name, *flags, args.image, f"/work/code/{args.script}"]
 
     stdout_path, stderr_path = os.path.join(job, f"{name}.stdout"), os.path.join(job, f"{name}.stderr")
     started, timed_out = now(), False
-    with open(stdout_path, "wb") as so, open(stderr_path, "wb") as se:
-        proc = subprocess.Popen(cmd, stdout=so, stderr=se)
-        try:
-            proc.wait(timeout=args.timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            subprocess.run([args.engine, "kill", name], capture_output=True)
-            proc.wait()
+    out_stats, err_stats = {}, {}
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    pumps = [threading.Thread(target=pump, args=(proc.stdout, stdout_path, args.max_stream_bytes, out_stats)),
+             threading.Thread(target=pump, args=(proc.stderr, stderr_path, args.max_stream_bytes, err_stats))]
+    for t in pumps:
+        t.start()
+    try:
+        proc.wait(timeout=args.timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        subprocess.run([args.engine, "kill", name], capture_output=True)
+        proc.wait()
+    for t in pumps:
+        t.join()
     ended = now()
 
     state = json.loads(subprocess.run([args.engine, "inspect", name], capture_output=True, text=True).stdout or "[{}]")[0]
@@ -89,12 +152,7 @@ def main():
     image_id = subprocess.run([args.engine, "image", "inspect", "--format", "{{.Id}}", args.image],
                               capture_output=True, text=True).stdout.strip()
 
-    artifacts = []
-    for root, _, files in os.walk(out):
-        for f in sorted(files):
-            path = os.path.join(root, f)
-            artifacts.append({"path": os.path.relpath(path, job), "bytes": os.path.getsize(path),
-                              "sha256": sha256_file(path)})
+    artifacts, skipped, total = collect_artifacts(out, job, args.max_artifacts, args.max_artifact_bytes)
 
     summary = {
         "container": name,
@@ -104,15 +162,20 @@ def main():
         "image_id": image_id,
         "command": cmd,
         "script": {"name": args.script, "sha256": sha256_file(os.path.join(job, "code", args.script))},
-        "limits": {"timeout_s": args.timeout, "memory": args.memory, "pids": args.pids, "cpus": args.cpus},
+        "limits": {"timeout_s": args.timeout, "memory": args.memory, "pids": args.pids, "cpus": args.cpus,
+                   "max_stream_bytes": args.max_stream_bytes, "max_artifacts": args.max_artifacts,
+                   "max_artifact_bytes": args.max_artifact_bytes},
         "started_at": started,
         "ended_at": ended,
         "exit_code": state.get("State", {}).get("ExitCode", proc.returncode),
         "oom_killed": bool(state.get("State", {}).get("OOMKilled", False)),
         "timed_out": timed_out,
-        "stdout": {"path": os.path.relpath(stdout_path, job), "sha256": sha256_file(stdout_path)},
-        "stderr": {"path": os.path.relpath(stderr_path, job), "sha256": sha256_file(stderr_path)},
+        "stdout": {"path": os.path.relpath(stdout_path, job), "sha256": sha256_file(stdout_path), **out_stats},
+        "stderr": {"path": os.path.relpath(stderr_path, job), "sha256": sha256_file(stderr_path), **err_stats},
         "artifacts": artifacts,
+        "artifacts_bytes": total,
+        "artifacts_skipped": skipped,
+        "artifacts_truncated": any(s["reason"] == "over the artifact cap" for s in skipped),
     }
     print(json.dumps(summary, indent=2))
     return 0

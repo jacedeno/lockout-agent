@@ -5,6 +5,9 @@
 set -euo pipefail
 
 VPC_SUBNET="${VPC_SUBNET:-10.50.0.0/24}"
+# The only address allowed to SSH in. Baked into the image: re-bake if the control plane's VPC
+# address changes (vultr-arz-control-plane.env, VULTR_VPC_IP).
+CONTROL_PLANE_IP="${CONTROL_PLANE_IP:?set CONTROL_PLANE_IP to the control plane VPC address}"
 SRC="$(cd "$(dirname "$0")/../.." && pwd)"
 export DEBIAN_FRONTEND=noninteractive
 
@@ -41,17 +44,22 @@ cp -r "$SRC/sandbox/runner" "$SRC/redteam" /opt/arz/
 chmod +x /opt/arz/runner/arz-run /opt/arz/redteam/run.py
 
 echo "== firewall (enabled for next boot, not applied now)"
-sed -e "s#@VPC_SUBNET@#$VPC_SUBNET#g" \
+sed -e "s#@CONTROL_PLANE_IP@#$CONTROL_PLANE_IP#g" \
     -e 's#@METADATA_RULE@#ip daddr 169.254.169.254 tcp dport 80 accept comment "boot phase only"#' \
     "$SRC/sandbox/image/arz-firewall.nft.in" > /etc/nftables.conf
-sed -e "s#@VPC_SUBNET@#$VPC_SUBNET#g" -e 's#@METADATA_RULE@##' \
+sed -e "s#@CONTROL_PLANE_IP@#$CONTROL_PLANE_IP#g" -e 's#@METADATA_RULE@##' \
     "$SRC/sandbox/image/arz-firewall.nft.in" > /etc/arz/firewall-strict.nft
 nft -c -f /etc/nftables.conf
 nft -c -f /etc/arz/firewall-strict.nft
+grep -q "@" /etc/nftables.conf /etc/arz/firewall-strict.nft && { echo "unrendered firewall template"; exit 1; }
 install -m 0644 "$SRC/sandbox/image/arz-lockdown.service" /etc/systemd/system/arz-lockdown.service
 ufw disable || true
 systemctl disable ufw.service || true
 systemctl enable nftables.service arz-lockdown.service
+
+echo "== ssh: keys only"
+install -m 0644 "$SRC/sandbox/image/sshd-00-arz.conf" /etc/ssh/sshd_config.d/00-arz.conf
+sshd -t
 
 echo "== quiet services that would only time out without egress"
 systemctl disable apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service \
@@ -62,6 +70,7 @@ cat > /etc/arz/image.json <<JSON
 {
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "vpc_subnet": "$VPC_SUBNET",
+  "control_plane_ip": "$CONTROL_PLANE_IP",
   "runner_image_id": "$(docker image inspect --format '{{.Id}}' arz-runner:latest)",
   "docker": "$(docker version --format '{{.Server.Version}}')",
   "runsc": "$(runsc --version | head -1)",

@@ -3,13 +3,15 @@
 
 Container probes run as ordinary job steps under the same limits as real jobs.
 With --host-probes, egress and metadata are also tried from the sandbox VM itself
-(outside the container), which checks the nftables layer on its own.
+(outside the container), which checks the nftables layer on its own. With --control-plane,
+the VM also tries to open new TCP connections to the control plane's VPC address.
 """
 
 import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -60,7 +62,15 @@ def run_probe(name, runner, workroot, engine, runtime, timeout):
             "stdout_sha256": summary["stdout"]["sha256"]}
 
 
-def host_probes():
+def tcp_open(host, port, timeout=4):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return "connected"
+    except OSError as e:
+        return None if not isinstance(e, ConnectionRefusedError) else "refused"
+
+
+def host_probes(control_plane=None):
     results = []
     for name, url, expected in (("host_egress", "https://example.com", "VM cannot reach the internet"),
                                 ("host_metadata", "http://169.254.169.254/v1/hostname",
@@ -70,6 +80,14 @@ def host_probes():
         contained = p.returncode != 0
         results.append({"probe": name, "layer": "vm", "expected": expected, "contained": contained,
                         "observed": (p.stderr.strip() or f"HTTP {p.stdout}")})
+    if control_plane:
+        # A refused (RST) connection still proves a packet reached the control plane, so only
+        # a silent drop on every port counts as contained.
+        seen = {port: tcp_open(control_plane, port) for port in (22, 80, 443, 8000)}
+        results.append({"probe": "host_control_plane", "layer": "vm",
+                        "expected": "VM cannot open a connection to the control plane",
+                        "contained": not any(seen.values()),
+                        "observed": {str(k): v or "no answer" for k, v in seen.items()}})
     return results
 
 
@@ -80,6 +98,7 @@ def main():
     p.add_argument("--runtime", default=None)
     p.add_argument("--timeout", type=int, default=15)
     p.add_argument("--host-probes", action="store_true")
+    p.add_argument("--control-plane", default=None, help="control plane VPC address (with --host-probes)")
     p.add_argument("--only", nargs="*", default=None)
     args = p.parse_args()
 
@@ -88,7 +107,7 @@ def main():
     results = [run_probe(n, os.path.abspath(args.runner), workroot, args.engine, args.runtime, args.timeout)
                for n in (args.only or PROBES)]
     if args.host_probes:
-        results += host_probes()
+        results += host_probes(args.control_plane)
     shutil.rmtree(workroot, ignore_errors=True)
     report = {"all_contained": all(r["contained"] for r in results), "results": results}
     print(json.dumps(report, indent=2))

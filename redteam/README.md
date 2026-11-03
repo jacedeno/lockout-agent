@@ -14,6 +14,7 @@ under the same limits as real jobs. `run.py` reports expected vs. observed per p
 | `mem_bomb` | OOM-killed at the memory cap |
 | `timeout` | killed at the wall-clock limit |
 | `host_egress`, `host_metadata` (`--host-probes`) | the sandbox VM itself cannot reach the internet or metadata |
+| `host_control_plane` (`--host-probes --control-plane <vpc-ip>`) | the sandbox VM cannot open a TCP connection to the control plane on 22/80/443/8000; a refusal (RST) counts as a failure, only a silent drop passes |
 
 ```bash
 redteam/run.py --engine podman --timeout 10        # local; rootless Podman here cannot enforce memory/pids
