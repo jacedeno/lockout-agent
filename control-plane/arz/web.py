@@ -209,8 +209,9 @@ async def create_job(request: Request):
     if LOCAL:
         from .localsandbox import LocalSandbox
         sandbox_cls = LocalSandbox
+    redteam = bool(body.get("redteam", dataset == "prompt_injection"))
     agent = Agent(dataset, DATASETS, JOBS, log=lambda m: print(m, flush=True),
-                  acquire=pool.acquire if pool else None, sandbox_cls=sandbox_cls)
+                  acquire=pool.acquire if pool else None, sandbox_cls=sandbox_cls, redteam=redteam)
     job = Job(agent, dataset, hashlib.sha256(ip.encode()).hexdigest()[:12])
     agent.emit = job.events.append
     store.jobs[job.id] = job

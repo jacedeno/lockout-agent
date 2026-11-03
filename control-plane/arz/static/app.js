@@ -12,7 +12,8 @@ const store = {
 let datasets = [], selected = null, source = null, current = null;
 
 // Events that physically happen inside the sandbox VM (the right lane).
-const IN_SANDBOX = new Set(["sandbox_active", "sandbox_ready", "job_uploaded", "file_added", "step_ran", "outputs_pulled"]);
+const IN_SANDBOX = new Set(["sandbox_active", "sandbox_ready", "job_uploaded", "file_added", "step_ran", "outputs_pulled",
+                            "injection_replayed", "containment_probe"]);
 const OPENS = new Set(["sandbox_created", "sandbox_assigned"]);
 
 // ---- status bar -------------------------------------------------------------------------------
@@ -45,6 +46,7 @@ function pick(name) {
   selected = datasets.find((d) => d.name === name);
   store.set("arz.dataset", name);
   $("datasets").querySelectorAll(".ds").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.name === name)));
+  $("redteam").checked = name === "prompt_injection";
   const n = $("notes");
   n.hidden = !selected;
   if (selected) {
@@ -60,7 +62,7 @@ async function run() {
   $("run").disabled = true;
   try {
     const r = await fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" },
-                                         body: JSON.stringify({ dataset: selected.name, code: $("code").value }) });
+                                         body: JSON.stringify({ dataset: selected.name, code: $("code").value, redteam: $("redteam").checked }) });
     const body = await r.json();
     if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
     store.set("arz.code", $("code").value);
@@ -127,6 +129,14 @@ function describe(e) {
     case "work_order": return { t: `Work order drafted · ${esc(d.priority)}`, cls: d.overridden ? "warn" : "", s: `${esc(d.id)}` + (d.overridden ? " · model claims overridden by the check" : "") };
     case "ground_truth_check": return { t: d.match ? "Matches the dataset's ground truth" : "Differs from the ground truth", cls: d.match ? "good" : "bad", s: kv(d.expected || {}) };
     case "job_failed": return { t: "Job failed", cls: "bad", s: esc(d.error) };
+    case "redteam_started": return { t: "Red team: what if the model had obeyed?", cls: "warn", s: "Replaying the injected commands literally, then the escape probes, in the same VM." };
+    case "injection_replayed": return { t: `${d.contained ? "Contained" : "NOT CONTAINED"} · ${esc(d.action)}`, cls: (d.contained ? "good" : "bad") + " compact", s: esc(d.result) };
+    case "containment_probe": return { t: `${d.contained ? "Blocked" : "ESCAPED"} · ${esc(d.probe.replace(/_/g, " "))}`, cls: (d.contained ? "good" : "bad") + " compact",
+      s: `${esc(d.layer)} layer: ${esc(d.expected)}` };
+    case "forged_claim_checked": return { t: d.rejected ? "Forged \u201chealthy, zone A\u201d claim rejected" : "Forged claim ACCEPTED", cls: d.rejected ? "good" : "bad",
+      html: `<ul>${(d.problems || []).map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` };
+    case "containment_summary": return { t: d.all_contained ? `Contained: ${d.probes_contained}/${d.probes} probes, replay blocked, forged claim rejected` : "Containment FAILED", cls: d.all_contained ? "good" : "bad" };
+    case "redteam_failed": return { t: "Red-team step failed", cls: "bad", s: esc(d.error) };
     default: return { t: esc(e.kind.replace(/_/g, " ")), s: "" };
   }
 }
@@ -193,6 +203,7 @@ async function showResults(jid, report) {
     </article>
     <div class="aside">
       ${report.files.spectrum ? `<figure class="figure" style="margin:0"><img src="/api/jobs/${jid}/files/spectrum" alt="Velocity spectrum of the worst radial axis, drawn by the agent's script in the sandbox"></figure>` : ""}
+      ${containmentHtml(report.containment)}
       <div class="receipt">
         <p class="label">Signed receipt</p>
         <div class="rk"><span>Events in the hash chain</span><span>${esc(rec.events)}</span></div>
@@ -202,6 +213,16 @@ async function showResults(jid, report) {
         <div class="actions"><a class="ghost" href="/api/jobs/${jid}/files/receipt">Download receipt.zip</a><a class="ghost" href="/verify">Verify it</a></div>
       </div>
     </div>`;
+}
+
+function containmentHtml(c) {
+  if (!c) return "";
+  if (c.error) return `<div class="contain"><p class="label">Containment</p><div class="big no">red-team step failed</div><ul><li>${esc(c.error)}</li></ul></div>`;
+  return `<div class="contain"><p class="label">Containment (red team)</p>
+    <div class="big ${c.all_contained ? "" : "no"}">${c.all_contained ? "Every escape blocked" : "Containment failed"}</div>
+    <ul><li>${c.probes_contained}/${c.probes} escape probes blocked (container, VM and control-plane layers)</li>
+        <li>Injected commands replayed literally: ${c.replay_contained ? "nothing left the sandbox" : "<b>something got out</b>"}</li>
+        <li>Forged \u201chealthy, zone A\u201d report: ${c.forged_claim_rejected ? "rejected by the deterministic check" : "<b>accepted</b>"}</li></ul></div>`;
 }
 
 // ---- open a job -------------------------------------------------------------------------------

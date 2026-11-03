@@ -127,7 +127,8 @@ def render_work_order(wo):
 
 
 class Agent:
-    def __init__(self, dataset, datasets_dir, jobs_dir, sandbox_cls=Sandbox, log=None, emit=None, acquire=None):
+    def __init__(self, dataset, datasets_dir, jobs_dir, sandbox_cls=Sandbox, log=None, emit=None, acquire=None,
+                 redteam=False):
         """emit(event) receives every log entry as it is appended (the web timeline);
         acquire() returns a pre-provisioned sandbox (the warm pool) instead of booting one."""
         self.dataset = dataset
@@ -143,6 +144,7 @@ class Agent:
         self.t0 = time.monotonic()
         self.emit = emit
         self.acquire = acquire
+        self.redteam = redteam
         self.events_file = open(os.path.join(self.dir, "events.jsonl"), "a")
 
     def event(self, _kind, **data):
@@ -185,7 +187,7 @@ class Agent:
         self.event("plan", **plan)
 
         final, previous, attempts = None, None, []
-        sb = None
+        sb, containment = None, None
         try:
             if self.acquire:
                 self.event("sandbox_requested", warm_pool=True)
@@ -247,6 +249,15 @@ class Agent:
                         break
                     self.event("attempt_failed", attempt=n, reason=why, stderr_tail=stderr_tail[-400:])
                     previous = {"script": script, "why": why, "stderr": stderr_tail or why}
+                if final is not None and self.redteam:
+                    from . import redteam
+                    os.makedirs(os.path.join(self.dir, "redteam"), exist_ok=True)
+                    self.event("redteam_started", note="replaying the injected instructions, then the escape probes")
+                    try:
+                        containment = redteam.run(self, sb, ref, os.environ.get("ARZ_CP_VPC_IP", "10.50.0.3"))
+                    except Exception as e:  # noqa: BLE001 - the analysis result still stands
+                        containment = {"error": f"{e.__class__.__name__}: {e}"[:300], "all_contained": False}
+                        self.event("redteam_failed", error=containment["error"])
             self.event("sandbox_facts", **sb.facts)
             if final is None:
                 raise RuntimeError(f"no working script after {MAX_ATTEMPTS} attempts")
@@ -304,6 +315,7 @@ class Agent:
                                "spectrum": os.path.relpath(os.path.join(final["dir"], "out", "spectrum.png"), self.dir)
                                if os.path.isfile(os.path.join(final["dir"], "out", "spectrum.png")) else None}
             report["summary"] = expl["diagnosis"]["summary"]
+            report["containment"] = containment
             report["priority"] = wo["priority"]
             report.update(result=got, attempts=attempts, integrity_problems=integrity, claims_rejected=rejected,
                           overridden=overridden, work_order=os.path.join(self.dir, "work_order.md"),
@@ -336,6 +348,8 @@ class Agent:
         for stream in ("stdout", "stderr"):
             shutil.copy(os.path.join(final["dir"], final["summary"][stream]["path"]), os.path.join(art, f"{stream}.txt"))
         open(os.path.join(art, "analysis.py"), "w").write(final["script"])
+        if os.path.isdir(os.path.join(self.dir, "redteam")):
+            shutil.copytree(os.path.join(self.dir, "redteam"), os.path.join(art, "redteam"))
         shutil.copytree(os.path.join(self.dir, "llm"), os.path.join(art, "llm"))
         bundle = os.path.join(self.dir, "receipt.zip")
         write_bundle(bundle, self.log, art, load_private_key(os.environ["ARZ_RECEIPT_KEY"]), self.job_id,
@@ -350,6 +364,7 @@ def main(argv=None):
     p.add_argument("--datasets", default=os.environ.get("ARZ_DATASETS", "/opt/arz/datasets/synth"))
     p.add_argument("--jobs", default="/var/lib/arz/jobs")
     p.add_argument("--local", action="store_true", help="development only: Podman instead of a sandbox VM")
+    p.add_argument("--redteam", action="store_true", help="after the analysis, replay the injection and run the escape probes")
     args = p.parse_args(argv)
     if not re.fullmatch(r"[a-z0-9_]{1,64}", args.dataset):
         p.error("dataset names are lowercase letters, digits and underscores")
@@ -357,7 +372,7 @@ def main(argv=None):
     if args.local:
         from .localsandbox import LocalSandbox
         cls = LocalSandbox
-    report = Agent(args.dataset, args.datasets, args.jobs, cls).run()
+    report = Agent(args.dataset, args.datasets, args.jobs, cls, redteam=args.redteam).run()
     print(json.dumps(report, indent=2))
     return 0 if report["ok"] else 1
 

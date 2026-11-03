@@ -299,7 +299,8 @@ def cmd_up(args):
         "VULTR_INFERENCE_API_KEY": VULTR["VULTR_INFERENCE_API_KEY"],
         "VULTR_INFERENCE_URL": VULTR.get("VULTR_INFERENCE_URL", "https://api.vultrinference.com/v1"),
         "ARZ_MODEL": "qwen3.8-flash-next", "ARZ_MODEL_ESCALATION": "glm-5.3",
-        "ARZ_ACCESS_CODE": read_env(ACCESS_CODE)["ARZ_ACCESS_CODE"], "ARZ_JOBS": "/var/lib/arz/jobs"}.items()).encode()
+        "ARZ_ACCESS_CODE": read_env(ACCESS_CODE)["ARZ_ACCESS_CODE"], "ARZ_JOBS": "/var/lib/arz/jobs",
+        "ARZ_CP_VPC_IP": env["VULTR_VPC_IP"]}.items()).encode()
     p = ssh(ip, "install -d -m 0700 /etc/arz && umask 077 && cat > /etc/arz/control-plane.env", input=cp_env, timeout=60)
     if p.returncode:
         raise RuntimeError(f"env upload failed: {p.stderr.decode()[-500:]}")
