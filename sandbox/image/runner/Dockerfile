@@ -8,6 +8,13 @@ RUN pip install --no-cache-dir \
         pandas==2.2.3 \
         matplotlib==3.9.2
 
+# vibkit, the analysis library job scripts call. Build context is the repo root
+# (docker build -f sandbox/image/runner/Dockerfile <repo>); --no-deps keeps the pins above.
+COPY toolkit/pyproject.toml /tmp/vibkit/pyproject.toml
+COPY toolkit/src /tmp/vibkit/src
+RUN pip install --no-cache-dir --no-deps /tmp/vibkit && rm -rf /tmp/vibkit \
+ && python3 -c "import vibkit; print('vibkit', vibkit.__version__)"
+
 # GPG_KEY comes from the base image (Python release signing key ID); blank it so a job's
 # environment carries nothing named like a credential.
 ENV GPG_KEY= \

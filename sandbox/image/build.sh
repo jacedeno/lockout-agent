@@ -23,7 +23,7 @@ apt-get update -q
 apt-get install -y -q runsc
 
 echo "== runner image"
-docker build -q -t arz-runner:latest "$SRC/sandbox/image/runner"
+docker build -q -t arz-runner:latest -f "$SRC/sandbox/image/runner/Dockerfile" "$SRC"
 
 echo "== docker: no bridge, no iptables; containers only ever get --network none"
 cat > /etc/docker/daemon.json <<JSON
@@ -35,7 +35,7 @@ cat > /etc/docker/daemon.json <<JSON
 }
 JSON
 systemctl restart docker
-docker run --rm --network none arz-runner:latest -c "print('runner ok')"
+docker run --rm --network none arz-runner:latest -c "import vibkit; print('runner ok, vibkit', vibkit.__version__)"
 docker run --rm --network none --runtime runsc arz-runner:latest -c "print('runsc ok')"
 
 echo "== tooling"
@@ -72,6 +72,7 @@ cat > /etc/arz/image.json <<JSON
   "vpc_subnet": "$VPC_SUBNET",
   "control_plane_ip": "$CONTROL_PLANE_IP",
   "runner_image_id": "$(docker image inspect --format '{{.Id}}' arz-runner:latest)",
+  "vibkit": "$(docker run --rm --network none arz-runner:latest -c 'import vibkit; print(vibkit.__version__)')",
   "docker": "$(docker version --format '{{.Server.Version}}')",
   "runsc": "$(runsc --version | head -1)",
   "kernel": "$(uname -r)"

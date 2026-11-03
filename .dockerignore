@@ -1,0 +1,6 @@
+# Local runner image builds use the repo root as context; send only what the Dockerfile copies.
+*
+!sandbox/image/runner/
+!toolkit/pyproject.toml
+!toolkit/src/
+**/__pycache__

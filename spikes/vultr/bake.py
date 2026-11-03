@@ -59,9 +59,10 @@ def ssh_firewall(created, allow):
 def source_tarball():
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for d in ("sandbox", "redteam"):
+        skip = ("__pycache__", ".venv", ".pytest_cache")
+        for d in ("sandbox", "redteam", "toolkit"):
             tar.add(os.path.join(REPO, d), arcname=f"arz-src/{d}",
-                    filter=lambda t: None if "__pycache__" in t.name else t)
+                    filter=lambda t: None if any(s in t.name.split("/") for s in skip) else t)
     return buf.getvalue()
 
 
