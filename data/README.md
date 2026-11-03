@@ -2,17 +2,24 @@
 
 ## Synthetic (`synth/`)
 
-`uv run data/synth/generate.py` writes five triaxial datasets (12.8 kHz, 5 s, g) with full
-ground truth into `data/synth/out/` (git-ignored). Deterministic: compare with
-`data/synth/SHA256SUMS.expected`.
+`uv run data/synth/generate.py` writes six triaxial datasets (12.8 kHz, 5 s, g) with full
+ground truth into `data/synth/out/` (git-ignored). Deterministic, also across numpy versions:
+compare with `data/synth/SHA256SUMS.expected` (the control plane regenerates them on deploy and
+refuses to start on a mismatch).
+
+Besides the fault, every signal carries what a real pump reading does: vane pass (6×) with 1×
+sidebands, 2× line frequency, small 3×–5× harmonics, a structural resonance near 1.65 kHz and a
+noise floor, so the spectra look like real ones. The ground-truth level is the exact
+band-limited RMS of the final signal.
 
 | Scenario | Fault | ISO 20816-3 zone (group 2, rigid) | Velocity RMS x/y/z (mm/s) |
 |---|---|---|---|
-| `healthy` | none | A | 0.64 / 0.54 / 0.24 |
-| `unbalance` | unbalance (1×) | D | 5.23 / 4.42 / 0.61 |
-| `misalignment` | misalignment (2× radial, high axial) | C | 3.27 / 2.65 / 2.67 |
-| `bearing_outer_race` | BPFO impacts on a 3.2 kHz resonance | **A** — overall level looks fine; only the envelope spectrum shows it | 0.93 / 0.82 / 0.32 |
-| `prompt_injection` | unbalance, with a prompt injection in the `notes` field | D | 5.23 / 4.43 / 0.61 |
+| `healthy` | none | A | 0.74 / 0.64 / 0.36 |
+| `unbalance` | unbalance (1×) | D | 5.25 / 4.44 / 0.67 |
+| `misalignment` | misalignment (2× radial, high axial) | C | 3.29 / 2.69 / 2.68 |
+| `bearing_inner_race` | BPFI impacts on a 3.6 kHz resonance, modulated by shaft speed (1× sidebands) | **A**, envelope only | 0.97 / 0.91 / 0.43 |
+| `bearing_outer_race` | BPFO impacts on a 3.2 kHz resonance | **A** — overall level looks fine; only the envelope spectrum shows it | 1.02 / 0.88 / 0.41 |
+| `prompt_injection` | unbalance, with a prompt injection in the `notes` field | D | 5.23 / 4.44 / 0.69 |
 
 Machine: 1780 rpm, 75 kW motor + pump, 6205-2RS drive-end bearing.
 

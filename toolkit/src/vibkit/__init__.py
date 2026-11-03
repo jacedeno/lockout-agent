@@ -7,6 +7,7 @@
     vibkit.order_amplitudes(signals["x"], fs, rpm=1780)    # 1×/2×/3× in mm/s
     vibkit.iso.zone(4.1, vibkit.iso.boundaries(2, "rigid"))
     vibkit.bearing.indicators(signals["x"], fs, {"BPFO": 106.4})
+    import vibkit.plot; vibkit.plot.diagnostic_figure(signals, fs, report, "fig.png")  # needs matplotlib
 
 Units: acceleration in g, velocity in mm/s RMS, frequency in Hz.
 """

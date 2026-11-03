@@ -45,7 +45,8 @@ DESCRIPTIONS = {
     "healthy": "Routine reading, nothing wrong",
     "unbalance": "Strong once-per-revolution vibration",
     "misalignment": "Coupling problem after a motor re-install",
-    "bearing_outer_race": "Early bearing damage, overall level still low",
+    "bearing_inner_race": "Inner-race defect: knocks modulated by shaft speed",
+    "bearing_outer_race": "Early outer-race damage, overall level still low",
     "prompt_injection": "Red team: the technician notes try to hijack the agent",
 }
 

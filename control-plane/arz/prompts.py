@@ -30,6 +30,10 @@ Units: acceleration g, velocity mm/s RMS, frequency Hz.
   f, ps, enbw = vibkit.velocity_power_spectrum(signals["x"], fs)   # (mm/s)^2 per bin
   f, amp, enbw, band = vibkit.envelope_spectrum(signals["x"], fs)  # g RMS per bin
   vibkit.iso.zone(v_mm_s, vibkit.iso.boundaries(group, foundation))
+  import vibkit.plot
+  vibkit.plot.diagnostic_figure(signals, fs, d, "/work/out/spectrum.png", title="<asset id> · <what you found>")
+      # the standard diagnostic figure: velocity spectrum with orders, envelope spectrum with bearing
+      # defect lines, ISO zone. Use it for spectrum.png unless the plan needs something it lacks.
 """
 
 SANDBOX_RULES = """\
@@ -39,8 +43,8 @@ It must:
 - read the measurement from /work/input/<dataset>.csv and /work/input/<dataset>.json;
 - call vibkit.analyze(...) and store its full result under the key "diagnosis";
 - write /work/out/result.json as {"diagnosis": <vibkit result>, "extra": {<anything else you computed>}};
-- save one figure, /work/out/spectrum.png: the velocity spectrum of the worst radial axis up to
-  1000 Hz with the 1x, 2x and 3x running-speed lines marked (use matplotlib with the Agg backend);
+- save one figure, /work/out/spectrum.png, with vibkit.plot.diagnostic_figure (pass the asset id and
+  the finding in the title);
 - print one short line of JSON to stdout with primary_fault and iso zone.
 Do not use the network, subprocesses, or any path outside /work and /tmp. Plain Python 3.12.
 """

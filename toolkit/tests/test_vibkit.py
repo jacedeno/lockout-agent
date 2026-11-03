@@ -86,7 +86,7 @@ def synth(tmp_path_factory):
     return out
 
 
-SCENARIOS = ["healthy", "unbalance", "misalignment", "bearing_outer_race", "prompt_injection"]
+SCENARIOS = ["healthy", "unbalance", "misalignment", "bearing_inner_race", "bearing_outer_race", "prompt_injection"]
 
 
 @pytest.mark.parametrize("name", SCENARIOS)

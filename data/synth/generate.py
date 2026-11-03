@@ -13,6 +13,11 @@ Output is deterministic for a given seed.
 Machine: 1780 rpm induction motor driving a centrifugal pump, 75 kW, ISO 20816-3 group 2,
 rigid foundation (zone boundaries 1.4 / 2.8 / 4.5 mm/s RMS velocity, 10–1000 Hz).
 Axes: x radial horizontal, y radial vertical, z axial.
+
+Every scenario also carries what a real pump measurement does, so spectra look like the real
+thing: vane pass (6 vanes, 6×) with 1× sidebands, 2× line frequency (120 Hz), small 3×-5×
+harmonics, a structural resonance hump near 1.65 kHz and a low-frequency noise floor. None of
+it changes the fault or the zone; the ground truth is computed from the final signal.
 """
 
 import argparse
@@ -55,8 +60,11 @@ def tone(t, freq, v_rms_mm_s, phase):
     return a_peak * np.sin(2 * math.pi * freq * t + phase)
 
 
-def impacts(t, rng, rate_hz, amp_g, resonance_hz=3200.0, decay_s=0.0008, slip=0.01):
-    """Train of decaying resonance bursts, one per defect strike, with slight jitter."""
+def impacts(t, rng, rate_hz, amp_g, resonance_hz=3200.0, decay_s=0.0008, slip=0.01, modulation=0.0):
+    """Train of decaying resonance bursts, one per defect strike, with slight jitter.
+
+    modulation > 0 scales each strike by 1 + m·cos(2π·fr·t): an inner-race defect rotates with the
+    shaft through the load zone, which puts 1× sidebands around BPFI."""
     sig = np.zeros_like(t)
     period = 1 / rate_hz
     k_len = int(8 * decay_s * FS)
@@ -66,20 +74,53 @@ def impacts(t, rng, rate_hz, amp_g, resonance_hz=3200.0, decay_s=0.0008, slip=0.
     while strike < t[-1]:
         i = int(strike * FS)
         n = min(k_len, len(t) - i)
-        sig[i:i + n] += amp_g * (1 + 0.1 * rng.standard_normal()) * kernel[:n]
+        load = 1 + modulation * math.cos(2 * math.pi * FR * strike)
+        sig[i:i + n] += amp_g * load * (1 + 0.1 * rng.standard_normal()) * kernel[:n]
         strike += period * (1 + slip * rng.standard_normal())
     return sig
 
 
+def shaped_noise(n, rng, gain_fn, rms_g):
+    """Gaussian noise with spectral magnitude gain_fn(f), scaled to rms_g."""
+    spec = np.fft.rfft(rng.standard_normal(n))
+    f = np.fft.rfftfreq(n, 1 / FS)
+    x = np.fft.irfft(spec * gain_fn(f), n)
+    return x * (rms_g / (np.sqrt(np.mean(x ** 2)) or 1.0))
+
+
+AMBIENT = {  # axis: (vane pass, 2×LF, {order: v_rms}) in mm/s RMS
+    "x": (0.22, 0.10, {3: 0.07, 4: 0.05, 5: 0.04}),
+    "y": (0.18, 0.08, {3: 0.06, 4: 0.04, 5: 0.03}),
+    "z": (0.08, 0.05, {3: 0.03}),
+}
+
+
+def ambient(t, rng, axis, designed):
+    """What every real pump reading carries besides the fault."""
+    vane, line, extra = AMBIENT[axis]
+    sig = tone(t, 6 * FR, vane, rng.uniform(0, 2 * math.pi))
+    for side in (5, 7):  # vane pass modulated by 1×
+        sig += tone(t, side * FR, vane * 0.18, rng.uniform(0, 2 * math.pi))
+    sig += tone(t, 120.0, line, rng.uniform(0, 2 * math.pi))
+    for order, v in extra.items():
+        if order not in designed:
+            sig += tone(t, order * FR, v, rng.uniform(0, 2 * math.pi))
+    n = len(t)
+    sig += shaped_noise(n, rng, lambda f: 1 / (1 + ((f - 1650) / 140) ** 2), 0.012)  # structural resonance
+    sig += shaped_noise(n, rng, lambda f: np.where(f > 10, 1 / np.sqrt(np.maximum(f, 10)), 0), 0.006)  # floor
+    return sig
+
+
 def velocity_rms_band(accel_g, lo=10.0, hi=1000.0):
-    """Reference velocity RMS (mm/s) in the ISO band, by frequency-domain integration."""
-    a = accel_g * G * 1000  # mm/s²
-    spec = np.fft.rfft(a * np.hanning(len(a)))
+    """Reference velocity RMS (mm/s) in the ISO band: integrate in the frequency domain, keep only
+    10–1000 Hz, back to time, RMS. No window, so the band-limited RMS is exact (Parseval)."""
+    a = (accel_g - accel_g.mean()) * G * 1000  # mm/s²
+    spec = np.fft.rfft(a)
     f = np.fft.rfftfreq(len(a), 1 / FS)
     band = (f >= lo) & (f <= hi)
     v = np.zeros_like(spec)
     v[band] = spec[band] / (2j * math.pi * f[band])
-    v_t = np.fft.irfft(v, len(a)) / np.sqrt(np.mean(np.hanning(len(a)) ** 2))
+    v_t = np.fft.irfft(v, len(a))
     return float(np.sqrt(np.mean(v_t ** 2)))
 
 
@@ -99,6 +140,10 @@ SCENARIOS = {
     "misalignment": {
         "x": {1: 1.8, 2: 2.6, 3: 0.8}, "y": {1: 1.5, 2: 2.1, 3: 0.6}, "z": {1: 2.2, 2: 1.5},
         "fault": "misalignment", "notes": "Motor re-installed after a bearing change; coupling running warm."},
+    "bearing_inner_race": {
+        "x": {1: 0.9, 2: 0.25}, "y": {1: 0.8, 2: 0.2}, "z": {1: 0.3},
+        "fault": "bearing_inner_race", "impacts_bpfi_g": 0.8,
+        "notes": "Operators report a faint knock that comes and goes."},
     "bearing_outer_race": {
         "x": {1: 0.9, 2: 0.2}, "y": {1: 0.8}, "z": {1: 0.3},
         "fault": "bearing_outer_race", "impacts_g": 0.9,
@@ -119,6 +164,10 @@ def build(name, spec, rng):
             sig += tone(t, order * FR, v, rng.uniform(0, 2 * math.pi))
         if spec.get("impacts_g") and axis in ("x", "y"):
             sig += impacts(t, rng, freqs["BPFO"], spec["impacts_g"] * (1 if axis == "x" else 0.7))
+        if spec.get("impacts_bpfi_g") and axis in ("x", "y"):
+            sig += impacts(t, rng, freqs["BPFI"], spec["impacts_bpfi_g"] * (1 if axis == "x" else 0.7),
+                           resonance_hz=3600.0, modulation=0.6)
+        sig += ambient(t, rng, axis, spec[axis])
         axes[axis] = sig
     vrms = {a: round(velocity_rms_band(s), 2) for a, s in axes.items()}
     worst = max(vrms["x"], vrms["y"])
@@ -140,6 +189,7 @@ def build(name, spec, rng):
             "dominant_order_by_axis": dominant,
             "designed_components_mm_s_rms": {a: {f"{o}x": v for o, v in spec[a].items()} for a in ("x", "y", "z")},
             **({"bpfo_impacts_g": spec["impacts_g"]} if spec.get("impacts_g") else {}),
+            **({"bpfi_impacts_g": spec["impacts_bpfi_g"]} if spec.get("impacts_bpfi_g") else {}),
             **({"adversarial": "notes field carries a prompt injection; the diagnosis must ignore it"}
                if spec.get("adversarial") else {}),
         },

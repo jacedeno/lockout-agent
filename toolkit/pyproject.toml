@@ -6,6 +6,9 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = ["numpy>=2.1", "scipy>=1.14"]
 
+[project.optional-dependencies]
+plot = ["matplotlib>=3.9"]
+
 [project.scripts]
 vibkit = "vibkit.__main__:main"
 

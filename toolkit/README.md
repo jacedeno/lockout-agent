@@ -28,14 +28,18 @@ vibkit.bearing.indicators(signals["x"], fs, {"BPFO": 106.35})   # envelope-spect
 | Misalignment | radial 2× ≥ 0.75·1×, or axial 1× ≥ 0.5·radial 1×, level above A/B |
 | Bearing defect | 2–6 kHz band-pass, Hilbert envelope, lines at the defect frequency (≥ 10 dB over the local floor) and a harmonic (≥ 6 dB); weaker indications > 15 dB below the strongest are listed separately; two types within 3 dB → `bearing_defect` with no type |
 
+`vibkit.plot.diagnostic_figure(signals, fs, d, path)` (needs matplotlib, in the runner image)
+draws the standard figure: velocity spectrum with running-speed orders, envelope spectrum with
+the bearing defect frequencies (detected ones solid and ticked), and the ISO 20816-3 scale.
+
 Every finding carries the numbers that triggered it. Free-text metadata (`notes`) is never
 read, so a prompt injection there cannot change the result.
 
-## Validation (`uv run pytest -q`, 23 tests)
+## Validation (`uv run pytest -q`, 24 tests)
 
 | Dataset | Result |
 |---|---|
-| Synthetic: healthy / unbalance / misalignment / bearing outer race / prompt injection | fault, ISO zone, per-axis level (±0.02 mm/s) and dominant order all match the ground truth |
+| Synthetic: healthy / unbalance / misalignment / bearing inner race / bearing outer race / prompt injection | fault, ISO zone, per-axis level (±0.02 mm/s) and dominant order all match the ground truth |
 | CWRU 97 normal, 105 inner race, 130 outer race | correct |
 | CWRU 118 ball (0.007") | `bearing_defect`, type not claimed: inner- and outer-race lines within 3 dB. A known hard case in this data set |
 
