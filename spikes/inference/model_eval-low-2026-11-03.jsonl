@@ -1,0 +1,9 @@
+expected 11.04 mm/s
+{"model": "qwen3.8-flash-next", "code_s": 5.3, "code_tokens": 2221, "json_ok": true, "value": 11.04, "correct": true, "tool_s": 1.0, "tool_calls": 1, "tool_ok": true}
+{"model": "qwen3.8-27b", "code_s": 5.8, "code_tokens": 2750, "json_ok": true, "value": 11.04, "correct": true, "tool_s": 1.2, "tool_calls": 1, "tool_ok": true}
+{"model": "glm-5.3", "code_s": 5.8, "code_tokens": 795, "json_ok": true, "value": 11.04, "correct": true, "tool_s": 1.4, "tool_calls": 1, "tool_ok": true}
+{"model": "glm-5.3-flash", "code_s": 2.7, "code_tokens": 703, "json_ok": true, "value": NaN, "correct": false, "tool_s": 0.9, "tool_calls": 1, "tool_ok": true}
+{"model": "deepseek-v4.1-flash-1017", "code_s": 21.0, "code_tokens": 2758, "json_ok": true, "value": 11.04, "correct": true, "tool_s": 0.7, "tool_calls": 1, "tool_ok": true}
+{"model": "mimo-v2.6-pro", "code_s": 39.1, "code_tokens": 6620, "json_ok": true, "value": 11.04, "correct": true, "tool_s": 1.5, "tool_calls": 1, "tool_ok": true}
+{"model": "mimo-v2.6-flash", "code_s": 9.2, "code_tokens": 2101, "json_ok": true, "value": 11.04, "correct": true, "tool_s": 0.9, "tool_calls": 2, "tool_ok": true}
+{"model": "minimax-m3.1-flash", "code_s": 18.1, "code_tokens": 7113, "json_ok": true, "value": 11.04, "correct": true, "tool_s": 0.9, "tool_calls": 1, "tool_ok": true}
