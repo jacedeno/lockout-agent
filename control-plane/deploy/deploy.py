@@ -35,6 +35,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SECRETS = os.path.expanduser(os.environ.get("ARZ_SECRETS_DIR", "~/.config/lockout"))
 ENV_FILE = os.path.join(SECRETS, "vultr-arz-control-plane.env")
 KEY_FILE = os.path.join(SECRETS, "vultr-arz-control-plane.key")
+RECEIPT_KEY = os.path.join(SECRETS, "arz-receipt-signing.pem")
+RECEIPT_PUB = os.path.join(SECRETS, "arz-receipt-signing.pub")
+REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 LABEL = "arz-control-plane"
 VPC_LABEL = "arz-vpc"
 SANDBOX_FW_LABEL = "arz-sandbox"
@@ -208,13 +211,18 @@ def wait_active(iid, timeout=600):
 
 def bundle():
     """Render the templates and return provision files as a tar archive (bytes)."""
-    subs = {"@HOST@": HOST, "@VPC_CIDR@": f"{VPC_SUBNET}/{VPC_MASK}"}
+    subs = {"@HOST@": HOST, "@VPC_CIDR@": f"{VPC_SUBNET}/{VPC_MASK}",
+            "@RECEIPT_PUBKEY@": open(RECEIPT_PUB).read().strip()}
+    skip = ("__pycache__", ".venv", ".pytest_cache", "tests", "uv.lock")
+    trees = [(os.path.join(HERE, "..", "arz"), "app/arz"),
+             (os.path.join(REPO, "receipts", "pyproject.toml"), "pkg/receipts/pyproject.toml"),
+             (os.path.join(REPO, "receipts", "src"), "pkg/receipts/src"),
+             (os.path.join(REPO, "data", "synth", "generate.py"), "synth/generate.py"),
+             (os.path.join(REPO, "data", "synth", "SHA256SUMS.expected"), "synth/SHA256SUMS.expected")]
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
-        pkg = os.path.join(HERE, "..", "arz")
-        for name in sorted(os.listdir(pkg)):
-            if name.endswith(".py"):
-                tar.add(os.path.join(pkg, name), arcname=f"app/arz/{name}")
+        for src, arc in trees:
+            tar.add(src, arcname=arc, filter=lambda t: None if any(s in t.name.split("/") for s in skip) else t)
         for name in sorted(os.listdir(os.path.join(HERE, "files"))):
             path = os.path.join(HERE, "files", name)
             if not os.path.isfile(path) or name.endswith(".pyc"):
@@ -281,10 +289,16 @@ def cmd_up(args):
     cp_env = "".join(f"{k}={v}\n" for k, v in {
         "VULTR_API_KEY": VULTR["VULTR_API_KEY"], "VULTR_API_URL": API,
         "ARZ_REGION": REGION, "ARZ_SANDBOX_PLAN": SANDBOX_PLAN, "ARZ_SNAPSHOT_ID": snapshot,
-        "ARZ_VPC_ID": vpc, "ARZ_SANDBOX_FIREWALL_ID": sandbox_fw}.items()).encode()
+        "ARZ_VPC_ID": vpc, "ARZ_SANDBOX_FIREWALL_ID": sandbox_fw,
+        "ARZ_RECEIPT_KEY": "/etc/arz/receipt-signing.pem",
+        "ARZ_RECEIPT_PUBKEY": open(RECEIPT_PUB).read().strip(),
+        "ARZ_DATASETS": "/opt/arz/datasets/synth"}.items()).encode()
     p = ssh(ip, "install -d -m 0700 /etc/arz && umask 077 && cat > /etc/arz/control-plane.env", input=cp_env, timeout=60)
     if p.returncode:
         raise RuntimeError(f"env upload failed: {p.stderr.decode()[-500:]}")
+    p = ssh(ip, "umask 077 && cat > /etc/arz/receipt-signing.pem", input=open(RECEIPT_KEY, "rb").read(), timeout=60)
+    if p.returncode:
+        raise RuntimeError(f"signing key upload failed: {p.stderr.decode()[-500:]}")
     log("provisioning (first run installs packages)")
     p = ssh(ip, "bash /root/arz-deploy/provision.sh 2>&1 | tail -30", timeout=1200)
     print(p.stdout.decode()[-3000:])

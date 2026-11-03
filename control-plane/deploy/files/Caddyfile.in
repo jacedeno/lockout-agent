@@ -14,6 +14,13 @@
 		respond "ok" 200
 	}
 
+	# Ed25519 public key that signs job receipts (hex). Verify a bundle with:
+	#   arz-receipt verify receipt.zip --pubkey $(curl -s https://@HOST@/.well-known/receipt-key)
+	handle /.well-known/receipt-key {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "@RECEIPT_PUBKEY@" 200
+	}
+
 	handle {
 		respond "Agent Rush control plane: online. The app is not deployed yet." 200
 	}

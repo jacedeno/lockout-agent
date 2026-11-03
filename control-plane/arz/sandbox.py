@@ -14,15 +14,21 @@ ARZ_VPC_ID, ARZ_SANDBOX_FIREWALL_ID, ARZ_REGION, ARZ_SANDBOX_PLAN.
 """
 
 import datetime as dt
+import hashlib
+import io
+import json
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import time
 
 from . import vultr
 
 TAG = "arz-sandbox"  # the reaper deletes anything with this tag and label prefix after 10 min
+REMOTE = "/root/job"
+RUNNER = "/opt/arz/runner/arz-run"
 
 
 def now():
@@ -30,10 +36,11 @@ def now():
 
 
 class Sandbox:
-    def __init__(self, job_id, log=print):
+    def __init__(self, job_id, log=print, on_event=None):
         self.job_id = job_id
         self.label = f"{TAG}-{job_id}"
         self.log = log
+        self.on_event = on_event  # e.g. a receipt EventLog's append(kind, data)
         self.events = []
         self.facts = {"label": self.label, "region": os.environ.get("ARZ_REGION", "dfw"),
                       "plan": os.environ.get("ARZ_SANDBOX_PLAN", "vc2-1c-1gb"),
@@ -47,6 +54,8 @@ class Sandbox:
         e = {"at": now(), "t_s": round(time.monotonic() - self._t0, 1), "event": name, **fields}
         self.events.append(e)
         self.log(f"[{e['t_s']:6.1f}s] {name} {fields if fields else ''}".rstrip())
+        if self.on_event:
+            self.on_event(name, fields)
         return e
 
     # -- lifecycle -----------------------------------------------------------------------------
@@ -75,7 +84,8 @@ class Sandbox:
         self.instance_id = inst["id"]
         self.facts["instance_id"] = inst["id"]
         self.facts["created_at"] = now()
-        self.event("sandbox_created", instance_id=inst["id"])
+        self.event("sandbox_created", instance_id=inst["id"], region=self.facts["region"],
+                   plan=self.facts["plan"], snapshot_id=self.facts["snapshot_id"])
         inst, secs = vultr.wait_active(inst["id"])
         self.event("sandbox_active", after_s=round(secs))
         self.vpc_ip = vultr.vpc_ip(inst["id"], os.environ["ARZ_VPC_ID"])
@@ -106,6 +116,56 @@ class Sandbox:
             time.sleep(5)
         raise RuntimeError(f"sandbox {self.instance_id} never accepted SSH on {self.vpc_ip}")
 
+    # -- job steps -----------------------------------------------------------------------------
+    def upload(self, files):
+        """Write {"input/x.csv": bytes, "code/s.py": bytes} into a fresh job directory."""
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for d in ("input", "code"):
+                info = tarfile.TarInfo(d)
+                info.type, info.mode = tarfile.DIRTYPE, 0o755
+                tar.addfile(info)
+            for name, data in files.items():
+                info = tarfile.TarInfo(name)
+                info.size, info.mode = len(data), 0o644
+                tar.addfile(info, io.BytesIO(data))
+        self.ssh(f"rm -rf {REMOTE} && mkdir -p {REMOTE} && chmod 755 {REMOTE} && tar -xf - -C {REMOTE}",
+                 input=buf.getvalue())
+        self.event("job_uploaded", files={k: hashlib.sha256(v).hexdigest() for k, v in files.items()})
+
+    def run(self, script, timeout=60, extra_args=""):
+        """Run code/<script> in the locked container; returns arz-run's JSON summary."""
+        p = self.ssh(f"{RUNNER} --job {REMOTE} --script {script} --timeout {int(timeout)} {extra_args}",
+                     timeout=timeout + 120)
+        summary = json.loads(p.stdout)
+        self.event("step_ran", script=script, script_sha256=summary["script"]["sha256"],
+                   command=summary["command"], limits=summary["limits"], image_id=summary["image_id"],
+                   exit_code=summary["exit_code"], timed_out=summary["timed_out"],
+                   oom_killed=summary["oom_killed"], stdout=summary["stdout"], stderr=summary["stderr"],
+                   artifacts=summary["artifacts"], artifacts_skipped=summary["artifacts_skipped"])
+        return summary
+
+    def pull(self, summary, dest):
+        """Copy stdout, stderr and listed artifacts into dest; recompute every SHA-256 here.
+
+        Returns [{path, sandbox_sha256, control_plane_sha256, match}]. Extraction refuses links,
+        absolute paths and traversal (tarfile's 'data' filter).
+        """
+        entries = [summary["stdout"], summary["stderr"]] + summary["artifacts"]
+        names = "\0".join(e["path"] for e in entries).encode() + b"\0"
+        p = self.ssh(f"tar -C {REMOTE} --null -T - -cf -", input=names, timeout=180)
+        with tarfile.open(fileobj=io.BytesIO(p.stdout)) as tar:
+            tar.extractall(dest, filter="data")
+        out = []
+        for e in entries:
+            path = os.path.join(dest, e["path"])
+            mine = _sha256(path) if os.path.isfile(path) else None
+            out.append({"path": e["path"], "sandbox_sha256": e["sha256"], "control_plane_sha256": mine,
+                        "match": mine == e["sha256"]})
+        self.event("outputs_pulled", bytes=len(p.stdout), files=len(out),
+                   all_hashes_match=all(v["match"] for v in out), verification=out)
+        return out
+
     def teardown(self):
         if self.instance_id:
             try:
@@ -125,3 +185,11 @@ class Sandbox:
         if self.keydir:
             shutil.rmtree(self.keydir, ignore_errors=True)
             self.keydir = None
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()

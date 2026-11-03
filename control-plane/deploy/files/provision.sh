@@ -56,6 +56,22 @@ rm -rf /opt/arz/app
 mv /opt/arz/app.new /opt/arz/app
 install -d -m 0700 /var/lib/arz /var/lib/arz/jobs
 
+# Job runtime: a venv with the receipts library (Ed25519 via cryptography) and numpy for the
+# dataset generator. Jobs run with /opt/arz/venv/bin/python -m arz.<job>.
+[ -x /opt/arz/venv/bin/python ] || python3 -m venv /opt/arz/venv
+/opt/arz/venv/bin/pip install -q --disable-pip-version-check numpy==2.1.3 ./pkg/receipts
+
+# Synthetic datasets, regenerated deterministically and checked against the repo's hashes.
+rm -rf /opt/arz/datasets/synth.new
+/opt/arz/venv/bin/python -I synth/generate.py --out /opt/arz/datasets/synth.new >/dev/null
+if ! diff <(sort /opt/arz/datasets/synth.new/SHA256SUMS) <(sort synth/SHA256SUMS.expected) >/dev/null; then
+	echo "synthetic datasets do not match SHA256SUMS.expected" >&2
+	diff <(sort /opt/arz/datasets/synth.new/SHA256SUMS) <(sort synth/SHA256SUMS.expected) >&2 || true
+	exit 1
+fi
+rm -rf /opt/arz/datasets/synth
+mv /opt/arz/datasets/synth.new /opt/arz/datasets/synth
+
 # Sandbox reaper.
 install -d -m 0755 /opt/arz
 install -m 0755 arz-reaper.py /opt/arz/arz-reaper.py
