@@ -156,7 +156,12 @@ class Agent:
             self.emit(entry)
 
     def ask(self, messages, schema, name, model=None):
-        obj, prov, req, resp = llm.chat_json(messages, schema, name, model=model)
+        """One model call; a malformed or truncated reply is retried once on the escalation model."""
+        try:
+            obj, prov, req, resp = llm.chat_json(messages, schema, name, model=model)
+        except llm.LLMError as e:
+            self.event("llm_retry", purpose=name, error=str(e)[:200], retry_model=llm.escalation_model())
+            obj, prov, req, resp = llm.chat_json(messages, schema, name, model=llm.escalation_model())
         self.n_calls += 1
         stem = os.path.join(self.dir, "llm", f"{self.n_calls:02d}-{name}")
         open(stem + "-request.json", "wb").write(req)
@@ -174,7 +179,10 @@ class Agent:
         self.event("job_created", job_id=self.job_id, kind="agent", dataset=self.dataset,
                    model=llm.default_model(), escalation_model=llm.escalation_model(),
                    inputs={k: hashlib.sha256(v).hexdigest() for k, v in inputs.items()})
-        report = {"job_id": self.job_id, "dataset": self.dataset, "started_at": now(), "ok": False}
+        queued_s = round(time.monotonic() - self.t0, 1)
+        self.t0 = time.monotonic()  # duration counts from here, not from the queue
+        report = {"job_id": self.job_id, "dataset": self.dataset, "started_at": now(), "ok": False,
+                  "queued_s": queued_s, "redteam": self.redteam}
 
         # Reference diagnosis, computed here with our own code: the yardstick for every claim.
         ref = vibkit.analyze(self.csv_path, self.meta_path)
@@ -315,7 +323,6 @@ class Agent:
                                "spectrum": os.path.relpath(os.path.join(final["dir"], "out", "spectrum.png"), self.dir)
                                if os.path.isfile(os.path.join(final["dir"], "out", "spectrum.png")) else None}
             report["summary"] = expl["diagnosis"]["summary"]
-            report["containment"] = containment
             report["priority"] = wo["priority"]
             report.update(result=got, attempts=attempts, integrity_problems=integrity, claims_rejected=rejected,
                           overridden=overridden, work_order=os.path.join(self.dir, "work_order.md"),
@@ -329,6 +336,7 @@ class Agent:
                 report["sandbox"] = sb.facts
             self.event("job_failed", error=report["error"])
         finally:
+            report["containment"] = containment  # kept even if a later step failed
             report["ended_at"] = now()
             report["duration_s"] = round(time.monotonic() - self.t0, 1)
             json.dump(report, open(os.path.join(self.dir, "report.json"), "w"), indent=2)

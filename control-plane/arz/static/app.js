@@ -137,6 +137,7 @@ function describe(e) {
       html: `<ul>${(d.problems || []).map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` };
     case "containment_summary": return { t: d.all_contained ? `Contained: ${d.probes_contained}/${d.probes} probes, replay blocked, forged claim rejected` : "Containment FAILED", cls: d.all_contained ? "good" : "bad" };
     case "redteam_failed": return { t: "Red-team step failed", cls: "bad", s: esc(d.error) };
+    case "llm_retry": return { t: `Model reply unusable · retrying ${esc(d.purpose)} on ${esc(d.retry_model)}`, cls: "warn", s: esc(d.error) };
     default: return { t: esc(e.kind.replace(/_/g, " ")), s: "" };
   }
 }
