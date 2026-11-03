@@ -166,7 +166,7 @@ a { color: var(--amber); }
 .prio.monitor { color: var(--zone-b); } .prio.none { color: var(--zone-a); }
 
 /* ISO 20816-3 severity scale with a needle at the measured value */
-.scale { position: relative; height: 34px; margin-top: 6px; }
+.scale { position: relative; height: 34px; margin-top: 22px; }
 .scale .bands { position: absolute; inset: 14px 0 12px; display: flex; border-radius: 2px; overflow: hidden; }
 .scale .bands i { display: block; height: 100%; opacity: 0.85; }
 .scale .bands i:nth-child(1) { background: var(--zone-a); } .scale .bands i:nth-child(2) { background: var(--zone-b); }
