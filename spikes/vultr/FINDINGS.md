@@ -111,8 +111,9 @@ as well as probe output, and re-run the whole suite under runsc on the next bake
 
 ## Re-bake with the 2026-10-23 hardening — 2026-11-03
 
-**Current snapshot: `3e8ce28f-3c1a-4d59-96b8-d092f9a5b839`** (`arz-sandbox 2026-11-03`, 2.36 GB
-compressed; build 2 min, snapshot 7.3 min). Baked for the control plane at `10.50.0.3`.
+Snapshot `3e8ce28f-3c1a-4d59-96b8-d092f9a5b839` (`arz-sandbox 2026-11-03 12:16`, 2.36 GB
+compressed; build 2 min, snapshot 7.3 min), baked for the control plane at `10.50.0.3`;
+superseded the same day and deleted.
 
 Changes: sandbox nftables accepts SSH only from the control plane's VPC address and no longer
 lets anything new out to the VPC; SSH keys only; `arz-run` lists regular files only and caps
@@ -131,6 +132,14 @@ the real control plane (`arz-vpc`) instead of a throwaway jump host.
 | Escape probes, gVisor (runsc) | 10/11: `fork_bomb` still reported as a failure (`spawned 1`), the judging problem described in the gVisor re-test; gVisor stays optional |
 | Control plane layer alone (sandbox firewall flushed) | **contained**: 22/80/443/8000 all silently dropped by the control plane's nftables |
 | Teardown | instance 404 after 1 s; firewall group and SSH key deleted |
+
+## Re-bake with vibkit — 2026-11-03
+
+**Current snapshot: `ea66ba21-2556-42c1-8780-9fbde386d0be`** (`arz-sandbox 2026-11-03 13:14`,
+2.40 GB compressed; build 2.2 min, snapshot 7.5 min). Same image plus `vibkit` 0.1.0 in the
+runner (`image.json` records it). Boot test through the control plane: ready in 229 s,
+**11/11 contained under Docker**, control-plane layer contained on its own, gVisor unchanged
+(10/11, the `fork_bomb` judging issue). Teardown verified.
 
 ## Not yet tested
 
