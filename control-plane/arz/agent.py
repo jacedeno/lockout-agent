@@ -40,7 +40,7 @@ MAX_SCRIPT_CHARS = 30_000
 STEP_TIMEOUT_S = 60
 REVIEW_PATTERNS = [       # observed and recorded, not blocked: the sandbox is the boundary
     (r"\b(import|from)\s+(subprocess|pty)\b|\bsubprocess\.|\bos\.(system|popen|exec\w*|spawn\w*)\b", "starts processes"),
-    (r"\b(import|from)\s+(socket|urllib|requests|http\.client|httpx|ftplib)\b|\b(socket|requests|httpx)\.\w", "network library"),
+    (r"\b(import|from)\s+(socket|urllib|requests|http\.client|httpx|ftplib)\b|\b(socket|urllib|requests|httpx)\.\w", "network library"),
     (r"\bcurl\b|\bwget\b", "curl/wget"),
     (r"169\.254\.169\.254|meta-data|metadata\.(google|vultr)", "cloud metadata endpoint"),
     (r"\.ssh|id_rsa|id_ed25519|authorized_keys", "SSH keys"),
