@@ -138,7 +138,8 @@ def explain_messages(asset, result_json, rejection=None):
                 "Write the diagnosis and a draft maintenance work order. The fault and ISO zone must be the ones "
                 "the measurement supports (diagnosis.primary_fault and diagnosis.iso_20816_3.zone). Priority: zone D "
                 "→ immediate, zone C → planned, a bearing defect at zone A/B → planned, zone B otherwise → monitor, "
-                "zone A with no fault → none. Quote the numbers in the evidence. Keep the summary under 80 words."}]
+                "zone A with no fault → none. Quote the numbers in the evidence exactly as they appear in result.json "
+                "(bearing envelope values are SNR in dB, not amplitudes). Keep the summary under 80 words."}]
     if rejection:
         msgs.append({"role": "user", "content": f"Your previous answer was rejected by the deterministic check: "
                                                 f"{rejection}. Answer again with values the measurement supports."})

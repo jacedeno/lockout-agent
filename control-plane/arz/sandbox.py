@@ -28,6 +28,7 @@ import time
 from . import vultr
 
 TAG = "arz-sandbox"  # the reaper deletes anything with this tag and label prefix after 10 min
+WARM_TAG = "arz-warm"  # warm-pool sandboxes: the reaper allows them 60 min instead
 REMOTE = "/root/job"
 RUNNER = "/opt/arz/runner/arz-run"
 
@@ -37,9 +38,10 @@ def now():
 
 
 class Sandbox:
-    def __init__(self, job_id, log=print, on_event=None):
+    def __init__(self, job_id, log=print, on_event=None, warm=False):
         self.job_id = job_id
         self.label = f"{TAG}-{job_id}"
+        self.tags = [TAG, WARM_TAG] if warm else [TAG]
         self.log = log
         self.on_event = on_event  # e.g. a receipt EventLog's append(kind, data)
         self.events = []
@@ -61,6 +63,8 @@ class Sandbox:
 
     # -- lifecycle -----------------------------------------------------------------------------
     def __enter__(self):
+        if self.vpc_ip:  # provisioned ahead of time by the warm pool
+            return self
         try:
             self.provision()
         except BaseException:
@@ -79,7 +83,7 @@ class Sandbox:
         self.sshkey_id = vultr.add_ssh_key(self.label, open(key + ".pub").read().strip())
         inst = vultr.create_instance({
             "region": self.facts["region"], "plan": self.facts["plan"], "snapshot_id": self.facts["snapshot_id"],
-            "label": self.label, "hostname": self.label, "tags": [TAG], "enable_ipv6": False,
+            "label": self.label, "hostname": self.label, "tags": self.tags, "enable_ipv6": False,
             "backups": "disabled", "activation_email": False, "sshkey_id": [self.sshkey_id],
             "attach_vpc": [os.environ["ARZ_VPC_ID"]], "firewall_group_id": os.environ["ARZ_SANDBOX_FIREWALL_ID"]})
         self.instance_id = inst["id"]
@@ -105,6 +109,12 @@ class Sandbox:
         if check and p.returncode:
             raise RuntimeError(f"sandbox command failed (rc={p.returncode}): {cmd}\n{p.stderr.decode()[-500:]}")
         return p
+
+    def alive(self):
+        try:
+            return self.ssh("test ! -e /root/job", timeout=20, check=False).returncode == 0
+        except subprocess.TimeoutExpired:
+            return False
 
     def wait_ssh(self, timeout=480):
         start = time.monotonic()

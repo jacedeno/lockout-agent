@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify a receipt · Blast Radius Zero</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><b>Blast Radius Zero</b><span>vibration diagnostics agent</span></div>
+  <nav><a href="/">Console</a><a href="/verify" aria-current="page">Verify a receipt</a></nav>
+</header>
+<main class="verify">
+  <h1>Verify a receipt</h1>
+  <p>Every run produces <code>receipt.zip</code>: the hash-chained log of what happened, every file the job
+    produced, and a manifest signed with the control plane's Ed25519 key. Drop one here to check the signature,
+    the signer, the chain and every file hash. Change one byte in any of them and it fails.</p>
+  <p>Offline, without this site: <code>arz-receipt verify receipt.zip --pubkey $(curl -s https://agentrush.geekendzone.net/.well-known/receipt-key)</code></p>
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept=".zip,application/zip">
+    <span id="droptext">Drop <b>receipt.zip</b> here, or click to choose it</span>
+  </label>
+  <div id="out"></div>
+</main>
+<script>
+"use strict";
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const drop = document.getElementById("drop"), out = document.getElementById("out");
+async function check(file) {
+  document.getElementById("droptext").textContent = file.name;
+  out.innerHTML = '<p class="hint">Checking…</p>';
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const r = await fetch("/api/verify", { method: "POST", body: fd });
+    const rep = await r.json();
+    if (!r.ok) throw new Error(rep.detail || `HTTP ${r.status}`);
+    out.innerHTML = `<div class="big-verdict ${rep.ok ? "ok" : "no"}">${rep.ok ? "Valid receipt" : "Invalid receipt"}</div>` +
+      (rep.job_id ? `<p class="hint">job <code>${esc(rep.job_id)}</code> · signed ${esc(rep.created_at)}${rep.extra && rep.extra.dataset ? ` · dataset <code>${esc(rep.extra.dataset)}</code>` : ""}</p>` : "") +
+      `<div class="checks">${rep.checks.map((c) => `<div><span class="${c.ok ? "p" : "f"}">${c.ok ? "PASS" : "FAIL"}</span><span>${esc(c.check)}</span><span class="x">${esc(c.detail)}</span></div>`).join("")}</div>`;
+  } catch (e) {
+    out.innerHTML = `<p class="hint err">${esc(e.message)}</p>`;
+  }
+}
+document.getElementById("file").addEventListener("change", (e) => e.target.files[0] && check(e.target.files[0]));
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && check(e.dataTransfer.files[0]));
+</script>
+</body>
+</html>

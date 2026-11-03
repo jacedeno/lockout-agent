@@ -1,5 +1,5 @@
 # Control plane reverse proxy (installed by control-plane/deploy/provision.sh).
-# Placeholder until the app is deployed: /healthz answers, everything else returns a notice.
+# /healthz and the receipt key are answered here; everything else goes to the app (arz-web).
 
 @HOST@ {
 	encode zstd gzip
@@ -21,7 +21,16 @@
 		respond "@RECEIPT_PUBKEY@" 200
 	}
 
+	handle /api/verify {
+		request_body {
+			max_size 11MB
+		}
+		reverse_proxy 127.0.0.1:8000
+	}
+
 	handle {
-		respond "Agent Rush control plane: online. The app is not deployed yet." 200
+		reverse_proxy 127.0.0.1:8000 {
+			flush_interval -1  # stream the live timeline (SSE) as it happens
+		}
 	}
 }

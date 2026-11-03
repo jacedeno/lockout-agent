@@ -1,0 +1,34 @@
+[Unit]
+Description=Agent Rush control plane web app (console, job API, warm pool, /verify)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=arz
+Group=arz
+WorkingDirectory=/opt/arz/app
+EnvironmentFile=/etc/arz/control-plane.env
+Environment=HOME=/var/lib/arz PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/arz/venv/bin/python -m uvicorn arz.web:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-server-header
+UMask=0027
+Restart=on-failure
+RestartSec=5
+# Stopping destroys the warm sandbox (pool.stop); give it time to see the 404.
+TimeoutStopSec=90
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/arz
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

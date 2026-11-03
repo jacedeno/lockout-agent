@@ -1,12 +1,12 @@
 [Unit]
-Description=Delete arz-sandbox instances older than 10 minutes
+Description=Delete arz-sandbox instances older than 10 minutes (warm-pool ones after 60)
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/arz/control-plane.env
-ExecStart=/usr/bin/python3 -I /opt/arz/arz-reaper.py --max-age 600
+ExecStart=/usr/bin/python3 -I /opt/arz/arz-reaper.py --max-age 600 --warm-max-age 3600
 TimeoutStartSec=180
 DynamicUser=yes
 NoNewPrivileges=yes

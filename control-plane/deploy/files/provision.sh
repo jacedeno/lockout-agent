@@ -62,6 +62,7 @@ install -d -m 0700 /var/lib/arz /var/lib/arz/jobs
 [ -x /opt/arz/venv/bin/python ] || python3 -m venv /opt/arz/venv
 /opt/arz/venv/bin/pip install -q --disable-pip-version-check numpy==2.1.3 scipy==1.14.1 ./pkg/receipts
 /opt/arz/venv/bin/pip install -q --disable-pip-version-check --no-deps --force-reinstall ./pkg/vibkit
+/opt/arz/venv/bin/pip install -q --disable-pip-version-check fastapi==0.115.12 uvicorn==0.34.2 python-multipart==0.0.20
 
 # Synthetic datasets, regenerated deterministically and checked against the repo's hashes.
 rm -rf /opt/arz/datasets/synth.new
@@ -74,11 +75,23 @@ fi
 rm -rf /opt/arz/datasets/synth
 mv /opt/arz/datasets/synth.new /opt/arz/datasets/synth
 
+# The web app runs as its own user; it reads the signing key through its group and owns the jobs.
+id arz >/dev/null 2>&1 || useradd --system --home-dir /var/lib/arz --shell /usr/sbin/nologin arz
+chown root:arz /etc/arz /etc/arz/receipt-signing.pem
+chmod 0750 /etc/arz
+chmod 0640 /etc/arz/receipt-signing.pem
+chown -R arz:arz /var/lib/arz
+install -m 0644 arz-web.service /etc/systemd/system/arz-web.service
+
 # Sandbox reaper.
 install -d -m 0755 /opt/arz
 install -m 0755 arz-reaper.py /opt/arz/arz-reaper.py
 install -m 0644 arz-reaper.service arz-reaper.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now arz-reaper.timer >/dev/null
+systemctl enable arz-web.service >/dev/null
+systemctl restart arz-web.service
+for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8000/api/status >/dev/null && break; sleep 1; done
+curl -sf http://127.0.0.1:8000/api/status >/dev/null || { journalctl -u arz-web -n 30 --no-pager >&2; exit 1; }
 
 echo "provision: ok"

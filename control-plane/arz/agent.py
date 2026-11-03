@@ -39,8 +39,8 @@ MAX_ATTEMPTS = 3          # first try + 2 retries; the last one uses the escalat
 MAX_SCRIPT_CHARS = 30_000
 STEP_TIMEOUT_S = 60
 REVIEW_PATTERNS = [       # observed and recorded, not blocked: the sandbox is the boundary
-    (r"\bsubprocess\b|\bos\.system\b|\bos\.popen\b|\bpty\b", "starts processes"),
-    (r"\bsocket\b|\burllib\b|\brequests\b|\bhttp\.client\b|\bhttpx\b", "network library"),
+    (r"\b(import|from)\s+(subprocess|pty)\b|\bsubprocess\.|\bos\.(system|popen|exec\w*|spawn\w*)\b", "starts processes"),
+    (r"\b(import|from)\s+(socket|urllib|requests|http\.client|httpx|ftplib)\b|\b(socket|requests|httpx)\.\w", "network library"),
     (r"\bcurl\b|\bwget\b", "curl/wget"),
     (r"169\.254\.169\.254|meta-data|metadata\.(google|vultr)", "cloud metadata endpoint"),
     (r"\.ssh|id_rsa|id_ed25519|authorized_keys", "SSH keys"),
@@ -127,7 +127,9 @@ def render_work_order(wo):
 
 
 class Agent:
-    def __init__(self, dataset, datasets_dir, jobs_dir, sandbox_cls=Sandbox, log=None):
+    def __init__(self, dataset, datasets_dir, jobs_dir, sandbox_cls=Sandbox, log=None, emit=None, acquire=None):
+        """emit(event) receives every log entry as it is appended (the web timeline);
+        acquire() returns a pre-provisioned sandbox (the warm pool) instead of booting one."""
         self.dataset = dataset
         self.csv_path = os.path.join(datasets_dir, f"{dataset}.csv")
         self.meta_path = os.path.join(datasets_dir, f"{dataset}.json")
@@ -139,10 +141,17 @@ class Agent:
         self.log = EventLog()
         self.n_calls = 0
         self.t0 = time.monotonic()
+        self.emit = emit
+        self.acquire = acquire
+        self.events_file = open(os.path.join(self.dir, "events.jsonl"), "a")
 
     def event(self, _kind, **data):
-        self.log.append(_kind, data)
+        entry = self.log.append(_kind, data)
+        self.events_file.write(json.dumps(entry, sort_keys=True) + "\n")
+        self.events_file.flush()
         self.log_line(f"[{time.monotonic() - self.t0:6.1f}s] {_kind} " + json.dumps(data)[:240])
+        if self.emit:
+            self.emit(entry)
 
     def ask(self, messages, schema, name, model=None):
         obj, prov, req, resp = llm.chat_json(messages, schema, name, model=model)
@@ -175,9 +184,18 @@ class Agent:
         json.dump(plan, open(os.path.join(self.dir, "plan.json"), "w"), indent=2)
         self.event("plan", **plan)
 
-        sb = self.sandbox_cls(self.job_id, log=self.log_line, on_event=lambda k, d: self.log.append(k, d))
         final, previous, attempts = None, None, []
+        sb = None
         try:
+            if self.acquire:
+                self.event("sandbox_requested", warm_pool=True)
+                sb = self.acquire()
+                sb.log, sb.on_event = (lambda m: None), (lambda k, d: self.event(k, **d))
+                self.event("sandbox_assigned", warm=True, instance_id=sb.instance_id, label=sb.label,
+                           vpc_ip=sb.vpc_ip, snapshot_id=sb.facts.get("snapshot_id"),
+                           created_at=sb.facts.get("created_at"), ready_for_s=round(time.time() - sb.ready_at))
+            else:
+                sb = self.sandbox_cls(self.job_id, log=lambda m: None, on_event=lambda k, d: self.event(k, **d))
             with sb:
                 sb.upload(inputs)
                 for n in range(1, MAX_ATTEMPTS + 1):
@@ -281,19 +299,32 @@ class Agent:
 
             bundle = self.sign(final)
             verified = verify_bundle(bundle, os.environ["ARZ_RECEIPT_PUBKEY"])
+            report["files"] = {"work_order_md": "work_order.md", "work_order_json": "work_order.json",
+                               "receipt": "receipt.zip", "plan": "plan.json",
+                               "spectrum": os.path.relpath(os.path.join(final["dir"], "out", "spectrum.png"), self.dir)
+                               if os.path.isfile(os.path.join(final["dir"], "out", "spectrum.png")) else None}
+            report["summary"] = expl["diagnosis"]["summary"]
+            report["priority"] = wo["priority"]
             report.update(result=got, attempts=attempts, integrity_problems=integrity, claims_rejected=rejected,
                           overridden=overridden, work_order=os.path.join(self.dir, "work_order.md"),
                           receipt={"path": bundle, "verified": verified["ok"], "events": len(self.log.events)},
-                          llm_calls=self.n_calls, sandbox=sb.facts,
+                          llm_calls=self.n_calls, sandbox=sb.facts, notes_contained_instructions=wo["notes_contained_instructions"],
                           ok=verified["ok"] and sb.facts.get("destroy_verified") is not False)
         except Exception as e:  # noqa: BLE001 - report it; the sandbox is already torn down
             report["error"] = f"{e.__class__.__name__}: {e}"[:1000]
             report["attempts"] = attempts
+            if sb is not None and sb.facts:
+                report["sandbox"] = sb.facts
             self.event("job_failed", error=report["error"])
         finally:
             report["ended_at"] = now()
             report["duration_s"] = round(time.monotonic() - self.t0, 1)
             json.dump(report, open(os.path.join(self.dir, "report.json"), "w"), indent=2)
+            # Not in the hash chain: the receipt is already signed. Only tells the live view to stop.
+            if self.emit:
+                self.emit({"seq": None, "kind": "job_finished", "ts": now(),
+                           "data": {"ok": report["ok"], "duration_s": report["duration_s"]}})
+            self.events_file.close()
         return report
 
     def sign(self, final):
