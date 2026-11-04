@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deploy the control plane VM (idempotent: re-run `up` to re-provision).
 
-    python3 -I control-plane/deploy/deploy.py up --allow 203.0.113.10/32 203.0.113.11/32 [--snapshot ID]
+    python3 -I control-plane/deploy/deploy.py up --allow 203.0.113.10/32 [--snapshot ID]
     python3 -I control-plane/deploy/deploy.py status
     python3 -I control-plane/deploy/deploy.py destroy [--vpc]
 
@@ -11,12 +11,15 @@ What it touches:
   anywhere, 22 from --allow) and SSH key `arz-control-plane`; plus the empty firewall group
   `arz-sandbox` every sandbox gets (no rules: no public inbound at all).
 - Cloudflare: a DNS-only A record for HOST, so Caddy serves its own Let's Encrypt certificate.
-- the secrets directory: vultr-arz-control-plane.env (resource IDs, IPs) and vultr-arz-control-plane.key.
+- $ARZ_SECRETS_DIR: vultr-arz-control-plane.env (resource IDs, IPs) and vultr-arz-control-plane.key.
 - The VM: provision.sh (swap, SSH keys-only, nftables, Caddy, sandbox reaper, the `arz` package
   in /opt/arz/app) and /etc/arz/control-plane.env (root-only: the Vultr API key plus the
   sandbox settings: snapshot, VPC, firewall group, region, plan).
 
-Credentials come from the secrets directory: vultr.env and cloudflare.env.
+Credentials come from $ARZ_SECRETS_DIR (default ~/.config/lockout), kept outside the repo:
+$ARZ_VULTR_ENV (default vultr.env: VULTR_API_KEY, VULTR_INFERENCE_API_KEY, VULTR_INFERENCE_URL),
+$ARZ_CLOUDFLARE_ENV (default cloudflare.env: CF_API_TOKEN), arz-receipt-signing.pem/.pub (Ed25519)
+and arz-access-code.env (ARZ_ACCESS_CODE). ARZ_HOST / ARZ_ZONE pick the public hostname.
 `destroy` keeps the VPC unless --vpc is given (sandboxes attach to it).
 """
 
@@ -33,6 +36,8 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SECRETS = os.path.expanduser(os.environ.get("ARZ_SECRETS_DIR", "~/.config/lockout"))
+VULTR_ENV = os.environ.get("ARZ_VULTR_ENV", "vultr.env")
+CLOUDFLARE_ENV = os.environ.get("ARZ_CLOUDFLARE_ENV", "cloudflare.env")
 ENV_FILE = os.path.join(SECRETS, "vultr-arz-control-plane.env")
 KEY_FILE = os.path.join(SECRETS, "vultr-arz-control-plane.key")
 RECEIPT_KEY = os.path.join(SECRETS, "arz-receipt-signing.pem")
@@ -47,8 +52,8 @@ VPC_SUBNET, VPC_MASK = "10.50.0.0", 24
 REGION = "dfw"
 PLAN = "vc2-1c-2gb"
 UBUNTU_2404 = 2284
-ZONE = "geekendzone.net"
-HOST = "agentrush.geekendzone.net"
+ZONE = os.environ.get("ARZ_ZONE", "geekendzone.net")
+HOST = os.environ.get("ARZ_HOST", "agentrush.geekendzone.net")
 HEADER = ("# Agent Rush control plane on Vultr (vultr-agent-rush/control-plane/deploy/deploy.py).\n"
           "# Resource IDs and addresses; the SSH key is vultr-arz-control-plane.key.\n")
 T0 = time.monotonic()
@@ -78,7 +83,7 @@ def write_env(path, values):
         os.umask(old)
 
 
-VULTR = read_env(os.path.join(SECRETS, "vultr.env"))
+VULTR = read_env(os.path.join(SECRETS, VULTR_ENV))
 API = VULTR.get("VULTR_API_URL", "https://api.vultr.com/v2").rstrip("/")
 
 
@@ -106,7 +111,7 @@ def vultr(method, path, body=None, ok=(200, 201, 202, 204)):
 
 
 def cloudflare(method, path, body=None):
-    token = read_env(os.path.join(SECRETS, "cloudflare.env"))["CF_API_TOKEN"]
+    token = read_env(os.path.join(SECRETS, CLOUDFLARE_ENV))["CF_API_TOKEN"]
     req = urllib.request.Request(f"https://api.cloudflare.com/client/v4{path}", method=method,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": f"Bearer {token}",

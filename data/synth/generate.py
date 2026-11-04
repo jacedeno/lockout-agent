@@ -8,7 +8,14 @@ Each scenario writes <name>.csv (time_s, accel_x_g, accel_y_g, accel_z_g) and <n
 (machine, sensor and bearing metadata plus the ground truth the diagnosis must recover).
 Output is deterministic for a given seed.
 
-    uv run data/synth/generate.py [--out data/synth/out] [--seed 20261103]
+    uv run data/synth/generate.py [--out data/synth/out] [--seed 20261103] [--trend]
+
+--trend also writes trends/<name>.json: a synthetic 12-week history of the same machine, one
+reading a week, each one generated like the dataset and measured with vibkit (so it needs vibkit
+importable). The last week is the dataset itself. Each scenario's history tells its story: a
+steady healthy pump, unbalance building up after the impeller change, misalignment appearing with
+the motor re-install, and bearing defects that grow in the envelope weeks before the overall
+level moves (the P-F interval). The trends are derived data, not part of SHA256SUMS.
 
 Machine: 1780 rpm induction motor driving a centrifugal pump, 75 kW, ISO 20816-3 group 2,
 rigid foundation (zone boundaries 1.4 / 2.8 / 4.5 mm/s RMS velocity, 10–1000 Hz).
@@ -197,10 +204,84 @@ def build(name, spec, rng):
     return t, axes, meta
 
 
+WEEKS = 12
+# How each history unfolds, oldest week first (week WEEKS-1 is the dataset).
+HISTORY = {
+    "healthy": {"kind": "steady"},
+    "unbalance": {"kind": "ramp", "start": 7},           # impeller replaced "last month"
+    "misalignment": {"kind": "step", "at": 8},           # motor re-installed three weeks ago
+    "bearing_inner_race": {"kind": "defect", "start": 4},
+    "bearing_outer_race": {"kind": "defect", "start": 2},
+    "prompt_injection": {"same_as": "unbalance"},
+}
+
+
+def history_spec(name, week):
+    """The scenario as it was in `week` of the history (0 = oldest, WEEKS-1 = the dataset)."""
+    final, plan = SCENARIOS[name], HISTORY[name]
+    if "same_as" in plan:
+        return {**history_spec(plan["same_as"], week), "notes": final["notes"]}
+    if week == WEEKS - 1:
+        return final
+    healthy = SCENARIOS["healthy"]
+
+    def blend(s):
+        out = dict(final)
+        for axis in ("x", "y", "z"):
+            mix = {o: healthy[axis].get(o, 0.0) + (final[axis].get(o, 0.0) - healthy[axis].get(o, 0.0)) * s
+                   for o in sorted(set(final[axis]) | set(healthy[axis]))}
+            out[axis] = {o: round(v, 4) for o, v in mix.items() if v > 0.001}
+        return out
+
+    kind = plan["kind"]
+    if kind == "steady":
+        k = 1 + 0.05 * math.sin(1.7 * week)
+        return {**final, **{a: {o: round(v * k, 4) for o, v in final[a].items()} for a in ("x", "y", "z")}}
+    if kind == "ramp":
+        return blend(0.0 if week < plan["start"] else ((week - plan["start"] + 1) / (WEEKS - plan["start"])) ** 1.6)
+    if kind == "step":
+        return blend(0.0 if week < plan["at"] else 0.86 + 0.14 * (week - plan["at"]) / (WEEKS - 1 - plan["at"]))
+    if kind == "defect":
+        s = 0.0 if week < plan["start"] else ((week - plan["start"] + 1) / (WEEKS - plan["start"])) ** 1.4
+        return {**final, **{k: final[k] * s for k in ("impacts_g", "impacts_bpfi_g") if k in final}}
+    raise ValueError(kind)
+
+
+def write_trend(name, index, seed, out, csv, meta_path):
+    """Measure each week of the history with vibkit and write trends/<name>.json."""
+    import vibkit  # only for --trend
+
+    weeks = []
+    for week in range(WEEKS):
+        if week == WEEKS - 1:
+            d = vibkit.analyze(csv, meta_path)
+        else:
+            _, axes, meta = build(name, history_spec(name, week), np.random.default_rng(seed + 1000 * (index + 1) + week))
+            d = vibkit.diagnose(axes, FS, meta)
+        iso = d["iso_20816_3"]
+        axis = iso["worst_radial_axis"]
+        env = {}
+        for k, v in ((d.get("bearing") or {}).get(axis) or {}).items():
+            if k == "_band_hz" or k == "FTF" or not v.get("harmonics"):
+                continue
+            h1 = v["harmonics"][0]
+            env[k] = {"snr_db": h1["snr_db"], "amp_g": h1["amp_g"], "detected": v["detected"]}
+        weeks.append({"week": week - (WEEKS - 1), "overall_mm_s": iso["worst_radial_mm_s"], "zone": iso["zone"],
+                      "axis": axis, "fault": d["primary_fault"], "envelope": env})
+    os.makedirs(os.path.join(out, "trends"), exist_ok=True)
+    with open(os.path.join(out, "trends", f"{name}.json"), "w") as f:
+        json.dump({"dataset": name, "synthetic": True, "interval": "weekly", "weeks": weeks,
+                   "detection_snr_db": 10.0,
+                   "note": "Synthetic weekly history of the same machine, generated like the dataset and measured "
+                           "with vibkit. The last week is this dataset."}, f, indent=1)
+    return weeks
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "out"))
     p.add_argument("--seed", type=int, default=20261103)
+    p.add_argument("--trend", action="store_true", help="also write trends/<name>.json (needs vibkit)")
     args = p.parse_args()
     os.makedirs(args.out, exist_ok=True)
     sums = []
@@ -218,6 +299,9 @@ def main():
                 sums.append(f"{hashlib.sha256(f.read()).hexdigest()}  {os.path.basename(path)}")
         gt = meta["ground_truth"]
         print(f"{name:20s} fault={gt['fault']:20s} zone={gt['iso_zone']} vrms={gt['velocity_rms_10_1000hz_mm_s']}")
+        if args.trend:
+            weeks = write_trend(name, i, args.seed, args.out, csv, os.path.join(args.out, f"{name}.json"))
+            print(f"{'':20s} trend: " + " ".join(f"{w['zone']}{w['overall_mm_s']:.2f}" for w in weeks))
     with open(os.path.join(args.out, "SHA256SUMS"), "w") as f:
         f.write("\n".join(sums) + "\n")
 

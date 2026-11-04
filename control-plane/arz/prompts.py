@@ -32,8 +32,9 @@ Units: acceleration g, velocity mm/s RMS, frequency Hz.
   vibkit.iso.zone(v_mm_s, vibkit.iso.boundaries(group, foundation))
   import vibkit.plot
   vibkit.plot.diagnostic_figure(signals, fs, d, "/work/out/spectrum.png", title="P-101A · Outer-race bearing defect")
-      # the standard diagnostic figure: velocity spectrum with orders, envelope spectrum with bearing
-      # defect lines, ISO zone. Use it for spectrum.png unless the plan needs something it lacks.
+      # the standard diagnostic figure: velocity spectrum to 10× with orders, envelope spectrum with
+      # bearing defect lines, a few revolutions of time waveform, ISO zone. US units by default
+      # (in/s peak, CPM). Use it for spectrum.png unless the plan needs something it lacks.
 """
 
 SANDBOX_RULES = """\

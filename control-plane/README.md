@@ -9,21 +9,21 @@ Built during the event window (Nov 3–8). See the plan (kept private) §3.
 ## Deploy (`deploy/`)
 
 ```bash
-python3 -I -B control-plane/deploy/deploy.py up --allow 203.0.113.10/32 203.0.113.11/32
+ARZ_SECRETS_DIR=~/.config/lockout python3 -I -B control-plane/deploy/deploy.py up --allow 203.0.113.10/32
 python3 -I -B control-plane/deploy/deploy.py status
 python3 -I -B control-plane/deploy/deploy.py destroy          # keeps the VPC; --vpc drops it too
 ```
 
 `up` is idempotent: it reuses whatever already exists and re-runs `provision.sh`, so it is also
-how a config change ships. Credentials are read from `the secrets directory` (`vultr.env`,
-`cloudflare.env`); resource IDs and the VM's SSH key are written back there
+how a config change ships. Credentials are read from `$ARZ_SECRETS_DIR` (`vultr.env`,
+`cloudflare.env`; see the docstring of `deploy.py`); resource IDs and the VM's SSH key are written back there
 (`vultr-arz-control-plane.env`, `vultr-arz-control-plane.key`).
 
 | Piece | Value |
 |---|---|
 | Instance | `arz-control-plane`, `vc2-1c-2gb`, Ubuntu 24.04, `dfw`, no IPv6, tag `arz-control-plane` |
 | VPC | `arz-vpc`, `10.50.0.0/24`, shared with the sandboxes |
-| Firewall group | `arz-control-plane`: 80/443 from anywhere, 22 from the operator's addresses |
+| Firewall group | `arz-control-plane`: 80/443 from anywhere, 22 from the `--allow` addresses |
 | Host firewall | nftables (ufw disabled): drops every new connection from the VPC, so a sandbox can never open one to the control plane |
 | URL | `https://agentrush.geekendzone.net` — Cloudflare A record, **DNS-only**; Caddy gets its own Let's Encrypt certificate |
 | SSH | keys only (`sshd_config.d/00-arz.conf`) |
@@ -90,11 +90,12 @@ SSE flushing for the live timeline.
 
 | Route | What |
 |---|---|
-| `/` | Console: pick a dataset, run it (access code), watch the two-lane timeline (control plane / sandbox VM; the sandbox lane exists only between create and the verified 404), verdict with the ISO 20816-3 scale, work order, the agent's spectrum, receipt download. `#job=<id>` links to a run |
+| `/` | Console: pick a dataset, run it (access code), watch the two-lane trail (control plane / sandbox VM). A finished run shows the verdict on the ISO 20816-3 scale, the lockout tag (isolated, zero energy verified, answer checked, signed), the vibration charts (12-week trend with the P-F curve, velocity and envelope spectra, time waveform; US units, in/s peak and CPM, or ISO), the work order, the agent's own figure and a print view. `#job=<id>` links to a run |
 | `/verify` | Upload a `receipt.zip`; every check shown PASS/FAIL against the published key |
 | `POST /api/jobs` | `{dataset, code}` → `{id}`. Needs `ARZ_ACCESS_CODE` (`$ARZ_SECRETS_DIR/arz-access-code.env`); 6 runs/hour per address, 40/day, queue of 4, one job at a time |
 | `GET /api/jobs[/<id>[/events|/files/<name>]]` | History (survives restarts), detail, SSE events, whitelisted files |
 | `GET /api/status` | Warm pool, queue, model, runs today |
+| `GET /api/datasets/<name>/view` | The control plane's own vibkit analysis of a measurement for the charts (spectra, waveform, defect lines) plus its synthetic weekly trend; cached |
 
 Warm pool of one: a sandbox booted ahead of time (tags `arz-sandbox` + `arz-warm`), used for
 exactly one job, replaced in the background, recycled after 40 min idle; the reaper allows

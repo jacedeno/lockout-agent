@@ -7,6 +7,13 @@ ground truth into `data/synth/out/` (git-ignored). Deterministic, also across nu
 compare with `data/synth/SHA256SUMS.expected` (the control plane regenerates them on deploy and
 refuses to start on a mismatch).
 
+`--trend` (needs vibkit) also writes `trends/<name>.json`: a **synthetic** 12-week history of the
+same machine, one reading a week, each generated like the dataset and measured with vibkit; the
+last week is the dataset itself. The histories tell each case's story: a steady healthy pump,
+unbalance building up after the impeller change, misalignment appearing with the motor
+re-install, and bearing defects that grow in the envelope for weeks while the overall level stays
+in zone A (the P-F interval). Trends are derived data and not in `SHA256SUMS`.
+
 Besides the fault, every signal carries what a real pump reading does: vane pass (6×) with 1×
 sidebands, 2× line frequency, small 3×–5× harmonics, a structural resonance near 1.65 kHz and a
 noise floor, so the spectra look like real ones. The ground-truth level is the exact

@@ -66,7 +66,8 @@ install -d -m 0700 /var/lib/arz /var/lib/arz/jobs
 
 # Synthetic datasets, regenerated deterministically and checked against the repo's hashes.
 rm -rf /opt/arz/datasets/synth.new
-/opt/arz/venv/bin/python -I synth/generate.py --out /opt/arz/datasets/synth.new >/dev/null
+# --trend adds trends/<name>.json, the synthetic weekly history (derived, not in SHA256SUMS).
+/opt/arz/venv/bin/python -I synth/generate.py --out /opt/arz/datasets/synth.new --trend >/dev/null
 if ! diff <(sort /opt/arz/datasets/synth.new/SHA256SUMS) <(sort synth/SHA256SUMS.expected) >/dev/null; then
 	echo "synthetic datasets do not match SHA256SUMS.expected" >&2
 	diff <(sort /opt/arz/datasets/synth.new/SHA256SUMS) <(sort synth/SHA256SUMS.expected) >&2 || true

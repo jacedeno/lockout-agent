@@ -1,4 +1,4 @@
-# Secrets: credentials live in the secrets directory, never here
+# Secrets: credentials live outside the repo ($ARZ_SECRETS_DIR), never here
 .env
 .env.*
 *.pem

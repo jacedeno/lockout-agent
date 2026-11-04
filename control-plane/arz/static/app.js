@@ -39,7 +39,23 @@ const when = (iso) => (iso ? `${MONTHS[+iso.slice(5, 7) - 1]} ${+iso.slice(8, 10
 const hms = (iso) => (iso || "").slice(11, 19);
 const memory = (m) => String(m ?? "").replace(/^(\d+)m$/i, "$1 MB").replace(/^(\d+)g$/i, "$1 GB");
 
+// Units: US by default (in/s peak derived from RMS, CPM), ISO on request (mm/s RMS, Hz).
+// ISO 20816-3 zones are defined in mm/s RMS; they are converted, never changed.
+const UNITS = {
+  us: { v: "in/s pk", f: "CPM", fk: 60, vk: Math.SQRT2 / 25.4, vd: 3, name: "in/s, CPM" },
+  iso: { v: "mm/s RMS", f: "Hz", fk: 1, vk: 1, vd: 2, name: "mm/s, Hz" },
+};
+let unitSys = store.get("arz.units") === "iso" ? "iso" : "us";
+const U = () => UNITS[unitSys];
+const vel = (mm) => mm * U().vk;
+const fq = (hz) => hz * U().fk;
+const fmtV = (mm) => `${vel(mm).toFixed(U().vd)} ${U().v}`;
+const fmtF = (hz) => (unitSys === "us" ? `${Math.round(hz * 60).toLocaleString("en-US")} CPM` : `${hz.toFixed(hz < 100 ? 2 : 1)} Hz`);
+const num = (v) => String(+v.toFixed(4));
+const DEFECT_NAME = { BPFO: "outer race", BPFI: "inner race", BSF: "ball spin", FTF: "cage" };
+
 let datasets = [], selected = null, source = null, current = null, isLive = false, status = null;
+let view = null, lastWO = null, specZoom = "10x", specLog = false;
 let events = [], lastSeg = null;
 
 // ---- status bar -------------------------------------------------------------------------------
@@ -241,17 +257,18 @@ function addEvent(e) {
 }
 
 // ---- verdict ----------------------------------------------------------------------------------
-function scaleHtml(v, b) {
+function scaleHtml(vmm, bmm) {
+  const v = vel(vmm), b = Object.fromEntries(Object.entries(bmm).map(([k, x]) => [k, vel(x)]));
   const max = Math.max(b["C/D"] * 1.6, v * 1.15);
   const pct = (x) => 100 * Math.min(x, max) / max;
   const edges = [0, b["A/B"], b["B/C"], b["C/D"], max];
   const bands = "ABCD".split("").map((z, i) => `<i class="z${z}" style="width:${(pct(edges[i + 1]) - pct(edges[i])).toFixed(2)}%">${z}</i>`).join("");
   const p = pct(v);
   const edge = p > 88 ? " right" : p < 12 ? " left" : "";
-  return `<div class="scale" role="img" aria-label="${esc(v.toFixed(2))} mm/s on the ISO 20816-3 scale">
+  return `<div class="scale" role="img" aria-label="${esc(fmtV(vmm))} on the ISO 20816-3 scale">
     <div class="bands">${bands}</div>
-    <div class="needle" style="left:${p.toFixed(2)}%"></div><div class="readout${edge}" style="left:${p.toFixed(2)}%">${esc(v.toFixed(2))} mm/s</div>
-    <div class="ticks">${["A/B", "B/C", "C/D"].map((k) => `<span style="left:${pct(b[k]).toFixed(2)}%">${esc(b[k])}</span>`).join("")}</div></div>`;
+    <div class="needle" style="left:${p.toFixed(2)}%"></div><div class="readout${edge}" style="left:${p.toFixed(2)}%">${esc(fmtV(vmm))}</div>
+    <div class="ticks">${["A/B", "B/C", "C/D"].map((k) => `<span style="left:${pct(b[k]).toFixed(2)}%">${esc(b[k].toFixed(U().vd))}</span>`).join("")}</div></div>`;
 }
 
 function verdictHtml(wo) {
@@ -294,6 +311,12 @@ function tagHtml(jid, report, swing) {
 }
 
 // ---- work order as the planner's form ----------------------------------------------------------
+function measuredText(wo) {
+  const m = wo.measured, v = m.worst_radial_mm_s;
+  return esc(unitSys === "us" ? `${fmtV(v)} (${v.toFixed(2)} mm/s RMS), axis ${m.axis}, zone ${wo.iso_zone}`
+    : `${v.toFixed(2)} mm/s RMS, axis ${m.axis}, zone ${wo.iso_zone}`);
+}
+
 function workOrderHtml(wo) {
   const m = wo.measured;
   const items = (xs, tag = "ul") => `<${tag}>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</${tag}>`;
@@ -303,7 +326,7 @@ function workOrderHtml(wo) {
     <div class="cells">
       <div class="cell"><span class="fl">Asset</span><p>${esc(wo.asset_id)}: ${esc(wo.asset)}</p></div>
       <div class="cell"><span class="fl">Failure mode</span><p>${esc(wo.failure_mode)}</p></div>
-      <div class="cell"><span class="fl">Measured</span><p>${esc(m.worst_radial_mm_s.toFixed(2))} mm/s RMS, axis ${esc(m.axis)}, zone ${esc(wo.iso_zone)}</p></div>
+      <div class="cell"><span class="fl">Measured</span><p id="wo-measured">${measuredText(wo)}</p></div>
       <div class="cell"><span class="fl">Priority</span><p><b>${esc(name(PRIORITY, wo.priority))}</b></p></div>
     </div>
     <div class="cell"><span class="fl">Summary</span><p>${esc(wo.summary)}</p></div>
@@ -333,15 +356,20 @@ function factsHtml(report) {
 }
 
 async function showResults(jid, report, swing) {
-  const wo = await (await fetch(`/api/jobs/${jid}/files/work_order_json`)).json();
+  const [wo, v] = await Promise.all([(await fetch(`/api/jobs/${jid}/files/work_order_json`)).json(), loadView(datasetOf(jid))]);
+  if (jid !== current) return;
+  lastWO = wo; view = v;
   if (!status) await refreshStatus();
   $("verdict").hidden = false;
   $("verdict").innerHTML = verdictHtml(wo);
   const fig = report.files.spectrum ? `<figure class="figure">
-      <button type="button" class="figbtn" id="figbtn" aria-label="Enlarge the spectrum figure"><img src="/api/jobs/${esc(jid)}/files/spectrum" alt="Velocity and envelope spectra of the worst radial axis, drawn by the agent's script inside the sandbox"></button>
-      <figcaption>Drawn inside the sandbox by the agent's own script with <code>vibkit.plot</code>, then pulled out and hash-checked. Click to enlarge.</figcaption></figure>` : "";
+      <button type="button" class="figbtn" id="figbtn" aria-label="Enlarge the agent's figure"><img src="/api/jobs/${esc(jid)}/files/spectrum" alt="The agent's diagnostic figure: velocity and envelope spectra and the time waveform of the worst radial axis"></button>
+      <figcaption>The agent's own figure: drawn inside the sandbox by its script with <code>vibkit.plot</code>, pulled out and hash-checked. Click to enlarge.</figcaption></figure>` : "";
   $("outcome").hidden = false;
-  $("outcome").innerHTML = tagHtml(jid, report, swing) + fig + `<div class="below">${workOrderHtml(wo)}${factsHtml(report)}</div>`;
+  $("outcome").innerHTML = tagHtml(jid, report, swing) + (view ? vibrationHtml() : "") +
+    `<div class="below">${workOrderHtml(wo)}<div class="aside">${factsHtml(report)}${fig}</div></div>`;
+  wireVibration();
+  drawVibration();
   if ($("figbtn")) $("figbtn").addEventListener("click", () => {
     $("lightimg").src = $("figbtn").querySelector("img").src;
     $("lightimg").alt = $("figbtn").querySelector("img").alt;
@@ -368,6 +396,7 @@ async function openJob(jid) {
   $("jobid").textContent = jid;
   $("printurl").textContent = `${location.origin}/#job=${jid}`;
   const info = await (await fetch(`/api/jobs/${jid}`)).json();
+  jobDataset[jid] = info.dataset;
   const ds = datasets.find((d) => d.name === info.dataset);
   $("jobtitle").textContent = name(DATASET, info.dataset);
   $("jobmeta").textContent = ds ? `${ds.asset_id}, ${ds.asset}, ${ds.rpm} rpm` : "";
@@ -392,6 +421,216 @@ async function openJob(jid) {
     addEvent(e);
   };
   loadRuns();
+}
+
+const jobDataset = {};
+const datasetOf = (jid) => jobDataset[jid];
+const viewCache = {};
+async function loadView(name) {
+  if (!name) return null;
+  if (!viewCache[name]) viewCache[name] = fetch(`/api/datasets/${encodeURIComponent(name)}/view`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  return viewCache[name];
+}
+
+// ---- vibration: trend, spectrum, envelope, waveform (control plane reference) ----------------------
+function vibrationHtml() {
+  return `<section class="vib" aria-label="Vibration">
+    <div class="vib-head">
+      <div><h2 class="sec">Vibration, axis ${esc(view.axis)}</h2>
+        <p class="hint">The control plane's own analysis of this measurement with <code>vibkit</code>, the yardstick every claim was checked against. Hover or use the arrow keys to read values.</p></div>
+      <div class="segctl" role="group" aria-label="Units">${Object.entries(UNITS).map(([k, u]) => `<button type="button" data-units="${k}" aria-pressed="${k === unitSys}">${u.name}</button>`).join("")}</div>
+    </div>
+    <div class="panel" id="p-trend"></div>
+    <div class="panel" id="p-spec"></div>
+    <div class="pair"><div class="panel" id="p-env"></div><div class="panel" id="p-wave"></div></div>
+  </section>`;
+}
+
+function wireVibration() {
+  document.querySelectorAll(".segctl [data-units]").forEach((b) => b.addEventListener("click", () => {
+    unitSys = b.dataset.units;
+    store.set("arz.units", unitSys);
+    document.querySelectorAll(".segctl [data-units]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.units === unitSys)));
+    if (lastWO) { $("verdict").innerHTML = verdictHtml(lastWO); if ($("wo-measured")) $("wo-measured").innerHTML = measuredText(lastWO); }
+    drawVibration();
+  }));
+}
+
+function drawVibration() {
+  if (!view) return;
+  drawTrend(); drawSpectrum(); drawEnvelope(); drawWaveform();
+}
+
+const ago = (wk) => (wk === 0 ? "this week" : -wk === 1 ? "1 week ago" : `${-wk} weeks ago`);
+const tickFmt = (v) => num(v);
+const table = (head, rows) => `<table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${
+  rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+
+function trendStory(weeks, key, env, det, pIdx) {
+  const now = weeks[weeks.length - 1];
+  if (pIdx >= 0) {
+    return `The envelope picked up ${key} (${DEFECT_NAME[key]}) ${ago(weeks[pIdx].week)}, and the line has grown to ${env[env.length - 1].toFixed(3)} g. ` +
+      `The overall level is still zone ${now.zone} (${fmtV(now.overall_mm_s)}), so a route that only trends overall velocity would not flag it yet. ` +
+      "That gap is the P-F interval: time to plan the bearing change before it fails.";
+  }
+  const out = weeks.findIndex((w) => w.zone !== "A");
+  if (out >= 0) {
+    let jump = 0, ji = 1;
+    for (let i = 1; i < weeks.length; i++) { const d = weeks[i].overall_mm_s - weeks[i - 1].overall_mm_s; if (d > jump) { jump = d; ji = i; } }
+    const total = now.overall_mm_s - weeks[0].overall_mm_s;
+    if (jump > 0.6 * total) {
+      return `The overall level jumped from zone ${weeks[ji - 1].zone} to zone ${weeks[ji].zone} ${ago(weeks[ji].week)} and has kept rising, to ${fmtV(now.overall_mm_s)} (zone ${now.zone}). No bearing defect lines in the envelope.`;
+    }
+    return `The overall level left zone A ${ago(weeks[out].week)} and has climbed every week since, to ${fmtV(now.overall_mm_s)} (zone ${now.zone}). No bearing defect lines in the envelope.`;
+  }
+  const vs = weeks.map((w) => w.overall_mm_s);
+  return `Steady in zone ${now.zone} for ${weeks.length} weeks (${fmtV(Math.min(...vs))} to ${fmtV(Math.max(...vs))}), and no bearing defect lines in the envelope.`;
+}
+
+function drawTrend() {
+  const p = $("p-trend"), t = view.trend;
+  if (!p) return;
+  if (!t) { p.hidden = true; return; }
+  const weeks = t.weeks, b = view.boundaries_mm_s, n = weeks.length;
+  const last = weeks[n - 1].envelope || {};
+  const names = Object.keys(last);
+  const key = names.find((k) => last[k].detected) || names.sort((a, c) => (last[c].amp_g || 0) - (last[a].amp_g || 0))[0] || "BPFO";
+  const xs = weeks.map((w) => w.week);
+  const ov = weeks.map((w) => vel(w.overall_mm_s));
+  const env = weeks.map((w) => ((w.envelope || {})[key] || { amp_g: 0 }).amp_g);
+  const det = weeks.map((w) => !!((w.envelope || {})[key] || {}).detected);
+  const pIdx = det.indexOf(true);
+  p.innerHTML = `<div class="panel-head"><h3>Trend, the last ${n} weeks</h3><span class="synthetic" title="${esc(t.note)}">Synthetic history</span></div>
+    <p class="story">${esc(trendStory(weeks, key, env, det, pIdx))}</p>
+    <p class="chart-title">Overall velocity, ${esc(U().v)}, on the ISO 20816-3 zones</p><div id="ch-tv"></div>
+    <p class="chart-title"><i class="key d-${esc(key)}"></i>${pIdx >= 0 ? `Envelope at ${esc(key)} (${esc(DEFECT_NAME[key] || key)}), g. Filled points: detected`
+      : `Bearing envelope, the strongest defect line (${esc(key)}), g. Nothing detected in ${n} weeks`}</p><div id="ch-te"></div>
+    <details class="tableview"><summary>Show the numbers</summary>${table(["Week", `Overall, ${U().v}`, "Zone", `${key} envelope, g`, "Detected"],
+      weeks.map((w, i) => [w.week === 0 ? "this reading" : `${w.week}`, ov[i].toFixed(U().vd), w.zone, env[i].toFixed(4), det[i] ? "yes" : "no"]))}</details>`;
+  const xspec = { domain: [-n + 0.6, 0.45], ticks: xs.filter((w) => w % 2 === 0), fmt: (v) => (v === 0 ? "now" : `${v} wk`), label: "weeks" };
+  const nearest = (xv) => Math.max(0, Math.min(n - 1, Math.round(xv) + n - 1));
+  const ymax = Math.max(vel(b["C/D"]) * 1.3, Math.max(...ov) * 1.15);
+  const pv = pIdx >= 0 ? [{ x: xs[pIdx], cls: "pmark", label: "P", strong: true }] : [];
+  Charts.chart($("ch-tv"), {
+    height: 200, label: "Overall velocity trend", group: "trend", keyStep: 1, x: xspec, margin: { r: 60 },
+    y: { domain: [0, ymax], fmt: tickFmt, label: U().v },
+    bands: [["A", 0, b["A/B"]], ["B", b["A/B"], b["B/C"]], ["C", b["B/C"], b["C/D"]], ["D", b["C/D"], 1e9]]
+      .map(([z, a, c]) => ({ y0: vel(a), y1: Math.min(vel(c), ymax), cls: `z${z}`, label: `zone ${z}` })),
+    series: { x: xs, y: ov, points: true, cls: "ink" },
+    markers: weeks.map((w, i) => ({ x: w.week, y: ov[i], r: i === n - 1 ? 6 : 4, cls: `z${w.zone}${i === n - 1 ? " now" : ""}`,
+      label: i === n - 1 ? "this reading" : null, anchor: "end", dx: -8 })),
+    vlines: pv,
+    hover: (xv) => { const i = nearest(xv); return { x: xs[i], y: ov[i], value: fmtV(weeks[i].overall_mm_s), lines: [i === n - 1 ? "this reading" : ago(xs[i]), `zone ${weeks[i].zone}`] }; },
+  });
+  Charts.chart($("ch-te"), {
+    height: 160, label: "Envelope trend", group: "trend", keyStep: 1, x: xspec, margin: { r: 60 },
+    y: { domain: [0, Math.max(0.02, Math.max(...env) * 1.25)], fmt: tickFmt, label: "g" },
+    series: { x: xs, y: env, points: true, cls: `d-${key}` },
+    markers: env.map((v, i) => ({ x: xs[i], y: v, r: i === n - 1 ? 5.5 : 4, cls: `d-${key} ${det[i] ? "filled" : "hollow"}` })),
+    vlines: pIdx >= 0 ? [{ x: xs[pIdx], cls: "pmark", label: "P, first detected", strong: true }] : [],
+    hover: (xv) => {
+      const i = nearest(xv), e = (weeks[i].envelope || {})[key] || {};
+      return { x: xs[i], y: env[i], value: `${env[i].toFixed(3)} g`, lines: [i === n - 1 ? "this reading" : ago(xs[i]), det[i] ? `${key} detected, ${e.snr_db} dB over the floor` : "below the detection threshold"] };
+    },
+  });
+}
+
+function peaks(xs, ys, x1, count) {
+  const top = Math.max(...ys.filter((_, i) => xs[i] <= x1));
+  const out = [];
+  for (let i = 3; i < xs.length - 3 && xs[i] <= x1; i++) {
+    if (ys[i] < 0.04 * top) continue;
+    let ok = true;
+    for (let k = -3; k <= 3 && ok; k++) if (k && ys[i + k] > ys[i]) ok = false;
+    if (ok) out.push(i);
+  }
+  return out.sort((a, c) => ys[c] - ys[a]).slice(0, count);
+}
+
+function drawSpectrum() {
+  const p = $("p-spec"), sp = view.spectrum, fr = view.rpm / 60;
+  if (!p) return;
+  const fmaxHz = specZoom === "10x" ? 10.5 * fr : 1000;
+  const fHz = sp.f_hz, xs = fHz.map(fq), ys = sp.v_mm_s.map(vel);
+  const x1 = fq(fmaxHz);
+  const vis = ys.filter((_, i) => xs[i] <= x1);
+  const top = Math.max(...vis);
+  const orders = [];
+  const dom = view.dominant_order;
+  for (let k = 1; k * fr <= fmaxHz; k++) {
+    const o = view.orders[`${k}x`];
+    const strong = k <= 3 || `${k}x` === dom || k === 6 || (o && vel(o.mm_s) >= 0.08 * top);
+    orders.push({ x: fq(k * fr), cls: k <= 3 ? "order" : "order faint", label: strong && (k <= 12 || k % 5 === 0) ? `${k}×` : null });
+  }
+  const pk = peaks(fHz, sp.v_mm_s, fmaxHz, 8);
+  p.innerHTML = `<div class="panel-head"><h3>Velocity spectrum</h3>
+      <div class="ctls"><div class="segctl small" role="group" aria-label="Frequency range">
+        <button type="button" data-zoom="10x" aria-pressed="${specZoom === "10x"}">To 10×</button>
+        <button type="button" data-zoom="full" aria-pressed="${specZoom === "full"}">To ${unitSys === "us" ? "60,000 CPM" : "1,000 Hz"}</button></div>
+      <div class="segctl small" role="group" aria-label="Amplitude scale">
+        <button type="button" data-log="0" aria-pressed="${!specLog}">Linear</button><button type="button" data-log="1" aria-pressed="${specLog}">Log</button></div></div></div>
+    <p class="chart-title">${esc(U().v)} per line, running-speed orders marked (1× = ${esc(fmtF(fr))})</p><div id="ch-spec"></div>
+    <details class="tableview"><summary>Largest peaks</summary>${table(["Frequency", "Order", `Amplitude, ${U().v}`],
+      pk.map((i) => [fmtF(fHz[i]), `${(fHz[i] / fr).toFixed(2)}×`, ys[i].toFixed(U().vd + 1)]))}</details>`;
+  p.querySelectorAll("[data-zoom]").forEach((b) => b.addEventListener("click", () => { specZoom = b.dataset.zoom; drawSpectrum(); }));
+  p.querySelectorAll("[data-log]").forEach((b) => b.addEventListener("click", () => { specLog = b.dataset.log === "1"; drawSpectrum(); }));
+  Charts.chart($("ch-spec"), {
+    height: 260, label: "Velocity spectrum",
+    x: { domain: [0, x1], fmt: (v) => (unitSys === "us" ? v.toLocaleString("en-US") : num(v)), label: `frequency, ${U().f}` },
+    y: specLog ? { domain: [top / 3000, top * 2], log: true, fmt: (v) => num(v), label: U().v } : { domain: [0, top * 1.2], fmt: tickFmt, label: U().v },
+    series: { x: xs, y: ys, area: true, cls: "ink" },
+    vlines: orders,
+    hover: (xv) => {
+      const i = Charts.snap(xs, ys, xv, x1 * 0.006, true);
+      return { x: xs[i], y: ys[i], value: `${ys[i].toFixed(U().vd + 1)} ${U().v}`, lines: [fmtF(fHz[i]), `${(fHz[i] / fr).toFixed(2)}× running speed`] };
+    },
+  });
+}
+
+function drawEnvelope() {
+  const p = $("p-env"), e = view.envelope;
+  if (!p) return;
+  const fHz = e.f_hz, xs = fHz.map(fq), ys = e.g;
+  const x1 = xs[xs.length - 1];
+  const top = Math.max(...ys);
+  const defs = Object.entries(view.defects).filter(([k]) => k !== "FTF");
+  const lines = [];
+  for (const [k, d] of defs) for (let h = 1; h <= 4 && fq(h * d.hz) <= x1; h++) {
+    lines.push({ x: fq(h * d.hz), cls: `d-${k} ${d.detected ? "hit" : "miss"}`, label: h === 1 ? `${k}${d.detected ? " ✓" : ""}` : null, strong: d.detected });
+  }
+  const near = (hz) => { for (const [k, d] of defs) for (let h = 1; h <= 4; h++) if (Math.abs(hz - h * d.hz) <= 0.015 * h * d.hz) return `${k} × ${h} (${DEFECT_NAME[k]})`; return "no defect frequency here"; };
+  p.innerHTML = `<div class="panel-head"><h3>Envelope spectrum</h3></div>
+    <p class="chart-title">g, ${esc(e.band_hz[0])}–${esc(e.band_hz[1])} Hz band, bearing defect frequencies and their harmonics</p>
+    <div class="legend">${defs.map(([k, d]) => `<span><i class="key d-${esc(k)}${d.detected ? "" : " miss"}"></i>${esc(k)} ${esc(DEFECT_NAME[k])}${d.detected ? `, detected (${esc(d.snr_db)} dB)` : ""}</span>`).join("")}</div>
+    <div id="ch-env"></div>
+    <details class="tableview"><summary>Show the numbers</summary>${table(["Line", "Frequency", "Amplitude, g", "Over the floor", "Detected"],
+      defs.map(([k, d]) => [`${k} (${DEFECT_NAME[k]})`, fmtF(d.hz), (d.amp_g ?? 0).toFixed(4), `${d.snr_db} dB`, d.detected ? "yes" : "no"]))}</details>`;
+  Charts.chart($("ch-env"), {
+    height: 210, label: "Envelope spectrum",
+    x: { domain: [0, x1], fmt: (v) => (unitSys === "us" ? v.toLocaleString("en-US") : num(v)), label: `frequency, ${U().f}` },
+    y: { domain: [0, Math.max(0.02, top * 1.25)], fmt: tickFmt, label: "g" },
+    series: { x: xs, y: ys, area: true, cls: "ink" },
+    vlines: lines,
+    hover: (xv) => { const i = Charts.snap(xs, ys, xv, x1 * 0.008, true); return { x: xs[i], y: ys[i], value: `${ys[i].toFixed(4)} g`, lines: [fmtF(fHz[i]), near(fHz[i])] }; },
+  });
+}
+
+function drawWaveform() {
+  const p = $("p-wave"), w = view.waveform;
+  if (!p) return;
+  const ys = w.g, xs = ys.map((_, i) => i * w.dt_ms);
+  const lim = Math.max(...ys.map(Math.abs)) * 1.15 || 1;
+  const revs = Math.round(xs[xs.length - 1] / w.rev_ms);
+  p.innerHTML = `<div class="panel-head"><h3>Time waveform</h3></div>
+    <p class="chart-title">Acceleration, g, ${revs} shaft revolutions, a line at each turn (${w.rev_ms.toFixed(1)} ms)</p><div id="ch-wave"></div>`;
+  Charts.chart($("ch-wave"), {
+    height: 210, label: "Time waveform",
+    x: { domain: [0, xs[xs.length - 1]], fmt: num, label: "time, ms" },
+    y: { domain: [-lim, lim], fmt: tickFmt, label: "g", ticks: 4 },
+    series: { x: xs, y: ys, cls: "ink thin" },
+    vlines: Array.from({ length: revs - 1 }, (_, r) => ({ x: (r + 1) * w.rev_ms, cls: "order" })),
+    hover: (xv) => { const i = Charts.snap(xs, ys, xv, 0, false); return { x: xs[i], y: ys[i], value: `${ys[i].toFixed(3)} g`, lines: [`${xs[i].toFixed(1)} ms`, `revolution ${Math.floor(xs[i] / w.rev_ms) + 1}`] }; },
+  });
 }
 
 function setState(st, fin) {

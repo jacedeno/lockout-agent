@@ -8,7 +8,7 @@ Subcommands:
               control plane as the jump host; check both firewall layers; tear down
 
 Reads VULTR_API_KEY from the environment and the control plane's IDs, addresses and SSH key
-from the secrets directory (vultr-arz-control-plane.env / .key). The sandbox only accepts SSH from
+from $ARZ_SECRETS_DIR (vultr-arz-control-plane.env / .key). The sandbox only accepts SSH from
 the control plane's VPC address, which build.sh bakes into the image. Reuses spike.py.
 """
 

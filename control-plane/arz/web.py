@@ -9,6 +9,7 @@ runs (the replay) and verify receipts without a code.
 
 import collections
 import datetime as dt
+import functools
 import hashlib
 import hmac
 import json
@@ -219,6 +220,66 @@ def status():
 @app.get("/api/datasets")
 def list_datasets():
     return datasets()
+
+
+def _sig(values, digits=5):
+    """Round to a few significant digits: the charts need shape, not 17-digit floats."""
+    return [float(f"{v:.{digits}g}") for v in values]
+
+
+@functools.lru_cache(maxsize=16)
+def dataset_view(name):
+    """The control plane's own look at a measurement, for the console's charts: velocity and
+    envelope spectra and a few revolutions of waveform of the worst radial axis (vibkit, the same
+    reference every job is checked against), plus the synthetic weekly history if there is one."""
+    import math
+
+    import numpy as np
+    import vibkit
+    from vibkit.spectral import envelope_spectrum, velocity_power_spectrum
+
+    csv, meta = os.path.join(DATASETS, f"{name}.csv"), os.path.join(DATASETS, f"{name}.json")
+    d = vibkit.analyze(csv, meta)
+    signals, fs = vibkit.load_csv(csv)
+    iso = d["iso_20816_3"]
+    axis = iso["worst_radial_axis"]
+    x = signals[axis]
+    fr = d["rpm"] / 60.0
+    f, ps, _ = velocity_power_spectrum(x, fs)
+    m = (f >= 8.0) & (f <= 1000.0)
+    bearing = (d.get("bearing") or {}).get(axis) or {}
+    defects = {k: {"hz": v["defect_hz"], "detected": v["detected"],
+                   "snr_db": (v.get("harmonics") or [{}])[0].get("snr_db"),
+                   "amp_g": (v.get("harmonics") or [{}])[0].get("amp_g")}
+               for k, v in bearing.items() if k != "_band_hz"}
+    fe, ae, _, band = envelope_spectrum(x, fs)
+    emax = max([4.2 * v["hz"] for k, v in defects.items() if k != "FTF"] + [12 * fr])
+    me = (fe >= 2.0) & (fe <= emax)
+    n = min(len(x), int(round(4 / fr * fs)))
+    w = np.asarray(x[:n], dtype=float)
+    trend_path = os.path.join(DATASETS, "trends", f"{name}.json")
+    trend = json.load(open(trend_path)) if os.path.isfile(trend_path) else None
+    return {
+        "dataset": name, "rpm": d["rpm"], "fs": fs, "axis": axis, "fault": d["primary_fault"],
+        "zone": iso["zone"], "worst_mm_s": iso["worst_radial_mm_s"], "boundaries_mm_s": iso["boundaries_mm_s"],
+        "orders": d["axes"][axis]["orders"], "dominant_order": d["axes"][axis]["dominant_order"],
+        "spectrum": {"f_hz": _sig(f[m]), "v_mm_s": _sig(np.sqrt(np.maximum(ps[m], 0.0)), 4)},
+        "envelope": {"f_hz": _sig(fe[me]), "g": _sig(ae[me], 4), "band_hz": [round(band[0]), round(band[1])]},
+        "defects": defects,
+        "waveform": {"dt_ms": 1000.0 / fs, "g": _sig(w - w.mean(), 4), "rev_ms": 1000.0 / fr},
+        "trend": trend,
+        "source": "control plane reference (vibkit) on the job's input; the trend is a synthetic history",
+        "_check": math.isfinite(iso["worst_radial_mm_s"]),
+    }
+
+
+@app.get("/api/datasets/{name}/view")
+def dataset_view_route(name: str):
+    if name not in {d["name"] for d in datasets()}:
+        raise HTTPException(404, "no such dataset")
+    out = dict(dataset_view(name))
+    out.pop("_check", None)
+    return JSONResponse(out, headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/api/jobs")
