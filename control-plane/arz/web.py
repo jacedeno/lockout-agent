@@ -40,6 +40,8 @@ PUBKEY = os.environ.get("ARZ_RECEIPT_PUBKEY", "")
 JOB_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_UPLOAD = 10 * 1024 * 1024
+# One line per admitted live run (time + hashed address), so a restart or deploy keeps the limits.
+ADMISSIONS = os.environ.get("ARZ_ADMISSIONS", os.path.join(os.path.dirname(JOBS), "admissions.jsonl"))
 
 DESCRIPTIONS = {
     "healthy": "Routine reading, nothing wrong",
@@ -72,6 +74,32 @@ class Store:
         self.hits = collections.defaultdict(collections.deque)
         self.day, self.day_count = None, 0
 
+    def load_admissions(self):
+        """Rebuild the hourly and daily counters from disk and drop entries older than a day."""
+        now, today, kept = time.time(), dt.date.today().isoformat(), []
+        try:
+            lines = open(ADMISSIONS).read().splitlines()
+        except OSError:
+            return
+        for line in lines:
+            try:
+                a = json.loads(line)
+                t, ip = float(a["t"]), str(a["ip"])
+            except (ValueError, KeyError, TypeError):
+                continue
+            if now - t > 86400:
+                continue
+            kept.append(line)
+            if dt.date.fromtimestamp(t).isoformat() == today:
+                self.day_count += 1
+            if now - t <= 3600:
+                self.hits[ip].append(t)
+        self.day = today
+        tmp = ADMISSIONS + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("".join(k + "\n" for k in kept))
+        os.replace(tmp, ADMISSIONS)
+
     def load_history(self, limit=30):
         """Past jobs from disk, so the replay survives a restart."""
         if not os.path.isdir(JOBS):
@@ -98,6 +126,7 @@ class Store:
         """Raise HTTPException if this client or the day is over its limit; else count it."""
         now = time.time()
         today = dt.date.today().isoformat()
+        ip = hashlib.sha256(ip.encode()).hexdigest()[:12]  # never stored in the clear
         with self.lock:
             if self.day != today:
                 self.day, self.day_count = today, 0
@@ -110,6 +139,11 @@ class Store:
                 raise HTTPException(429, f"limit of {PER_IP_HOURLY} runs per hour from one address")
             hits.append(now)
             self.day_count += 1
+            try:
+                with open(ADMISSIONS, "a") as f:
+                    f.write(json.dumps({"t": round(now, 3), "ip": ip}) + "\n")
+            except OSError as e:
+                print(f"[web] could not record the admission: {e}", flush=True)
 
 
 store = Store()
@@ -137,6 +171,7 @@ def startup():
     global pool
     os.makedirs(JOBS, exist_ok=True)
     store.load_history()
+    store.load_admissions()
     if USE_POOL:
         from .pool import WarmPool
         pool = WarmPool(log=lambda m: print(f"[pool] {m}", flush=True))

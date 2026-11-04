@@ -31,7 +31,7 @@ Units: acceleration g, velocity mm/s RMS, frequency Hz.
   f, amp, enbw, band = vibkit.envelope_spectrum(signals["x"], fs)  # g RMS per bin
   vibkit.iso.zone(v_mm_s, vibkit.iso.boundaries(group, foundation))
   import vibkit.plot
-  vibkit.plot.diagnostic_figure(signals, fs, d, "/work/out/spectrum.png", title="<asset id> · <what you found>")
+  vibkit.plot.diagnostic_figure(signals, fs, d, "/work/out/spectrum.png", title="P-101A · Outer-race bearing defect")
       # the standard diagnostic figure: velocity spectrum with orders, envelope spectrum with bearing
       # defect lines, ISO zone. Use it for spectrum.png unless the plan needs something it lacks.
 """
@@ -43,8 +43,8 @@ It must:
 - read the measurement from /work/input/<dataset>.csv and /work/input/<dataset>.json;
 - call vibkit.analyze(...) and store its full result under the key "diagnosis";
 - write /work/out/result.json as {"diagnosis": <vibkit result>, "extra": {<anything else you computed>}};
-- save one figure, /work/out/spectrum.png, with vibkit.plot.diagnostic_figure (pass the asset id and
-  the finding in the title);
+- save one figure, /work/out/spectrum.png, with vibkit.plot.diagnostic_figure; its title is the asset id
+  and the finding in plain words, at most 40 characters, no underscores (e.g. "P-101A · Unbalance");
 - print one short line of JSON to stdout with primary_fault and iso zone.
 Do not use the network, subprocesses, or any path outside /work and /tmp. Plain Python 3.12.
 """

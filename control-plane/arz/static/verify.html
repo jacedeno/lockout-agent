@@ -4,14 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Verify a receipt · Lockout</title>
+<meta name="description" content="Check a Lockout receipt: the Ed25519 signature, the signer, the hash chain and every file the job produced.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
 <header class="bar">
-  <div class="brand"><b>Lockout</b><span>a reliability agent that works with every energy source isolated</span></div>
+  <a class="brand" href="/"><i class="mark" aria-hidden="true"></i><b>Lockout</b></a>
+  <span class="tagline">A reliability agent that works with every energy source isolated</span>
   <nav><a href="/">Console</a><a href="/verify" aria-current="page">Verify a receipt</a></nav>
 </header>
 <main class="verify">
@@ -24,12 +26,37 @@
     <input type="file" id="file" accept=".zip,application/zip">
     <span id="droptext">Drop <b>receipt.zip</b> here, or click to choose it</span>
   </label>
-  <div id="out"></div>
+  <div id="out" aria-live="polite"></div>
 </main>
 <script>
 "use strict";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const drop = document.getElementById("drop"), out = document.getElementById("out");
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const when = (iso) => (iso ? `${MONTHS[+iso.slice(5, 7) - 1]} ${+iso.slice(8, 10)}, ${iso.slice(0, 4)}, ${iso.slice(11, 16)} UTC` : "");
+
+// The verdict as a lockout tag: four facts, each from the checks that prove it.
+function tag(rep) {
+  const by = (pred) => rep.checks.filter((c) => pred(c.check));
+  const allOk = (cs) => cs.length > 0 && cs.every((c) => c.ok);
+  const sig = by((n) => n === "signature"), signer = by((n) => n === "signer trusted");
+  const chain = by((n) => n.startsWith("log ")), files = by((n) => n.startsWith("artifact ") || n === "no unlisted artifacts");
+  const nfiles = by((n) => n.startsWith("artifact ")).length;
+  const fact = (ok, title, body) => `<div class="fact ${ok ? "ok" : "no"}"><b><i aria-hidden="true">${ok ? "✓" : "✕"}</i>${title}</b><p>${body}</p></div>`;
+  const detail = (cs) => esc((cs.find((c) => !c.ok) || cs[0] || {}).detail || "");
+  return `<div class="tagwrap"><section class="tag${rep.ok ? "" : " fail"}" aria-label="Verification result">
+    <div class="band"><i class="grommet" aria-hidden="true"></i><span>${rep.ok ? "Valid receipt" : "Invalid receipt"}</span></div>
+    <div class="body"><div class="facts">
+      ${fact(allOk(sig), "Signature", allOk(sig) ? `Ed25519, ${detail(sig)}` : `Does not verify. ${detail(sig)}`)}
+      ${fact(allOk(signer), "Signer", allOk(signer) ? "The control plane's published key." : signer.length ? `Not the published key. ${detail(signer)}` : "Not checked.")}
+      ${fact(allOk(chain), "Hash chain", allOk(chain) ? "Every event links to the one before; the head matches the manifest." : `Broken. ${detail(chain)}`)}
+      ${fact(allOk(files), "Files", allOk(files) ? `${nfiles} ${nfiles === 1 ? "file" : "files"}, every SHA-256 matches, nothing unlisted.`
+        : `Modified, missing or unlisted: ${files.filter((c) => !c.ok).map((c) => `<code>${esc(c.check === "no unlisted artifacts" ? c.detail : c.check.replace(/^artifact /, ""))}</code>`).join(", ")}`)}
+    </div>
+    ${rep.job_id ? `<div class="fields"><span>Job <b class="mono">${esc(rep.job_id)}</b></span><span>Signed <b>${esc(when(rep.created_at))}</b></span>${rep.extra && rep.extra.dataset ? `<span>Measurement <b class="mono">${esc(rep.extra.dataset)}</b></span>` : ""}${rep.job_id ? `<span><a href="/#job=${esc(rep.job_id)}">Open the run</a></span>` : ""}</div>` : ""}
+    </div></section></div>`;
+}
+
 async function check(file) {
   document.getElementById("droptext").textContent = file.name;
   out.innerHTML = '<p class="hint">Checking…</p>';
@@ -39,9 +66,8 @@ async function check(file) {
     const r = await fetch("/api/verify", { method: "POST", body: fd });
     const rep = await r.json();
     if (!r.ok) throw new Error(rep.detail || `HTTP ${r.status}`);
-    out.innerHTML = `<div class="big-verdict ${rep.ok ? "ok" : "no"}">${rep.ok ? "Valid receipt" : "Invalid receipt"}</div>` +
-      (rep.job_id ? `<p class="hint">job <code>${esc(rep.job_id)}</code> · signed ${esc(rep.created_at)}${rep.extra && rep.extra.dataset ? ` · dataset <code>${esc(rep.extra.dataset)}</code>` : ""}</p>` : "") +
-      `<div class="checks">${rep.checks.map((c) => `<div><span class="${c.ok ? "p" : "f"}">${c.ok ? "PASS" : "FAIL"}</span><span>${esc(c.check)}</span><span class="x">${esc(c.detail)}</span></div>`).join("")}</div>`;
+    out.innerHTML = tag(rep) + '<h2 class="sec checks-head">Every check</h2>' +
+      `<div class="checks">${[...rep.checks].sort((a, b) => a.ok - b.ok).map((c) => `<div><span class="${c.ok ? "p" : "f"}" aria-label="${c.ok ? "passes" : "fails"}">${c.ok ? "✓" : "✕"}</span><span>${esc(c.check)}</span><span class="x">${esc(c.detail)}</span></div>`).join("")}</div>`;
   } catch (e) {
     out.innerHTML = `<p class="hint err">${esc(e.message)}</p>`;
   }

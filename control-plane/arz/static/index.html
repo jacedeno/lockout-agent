@@ -7,34 +7,35 @@
 <meta name="description" content="A reliability agent that writes and runs its analysis inside a throwaway, network-less Vultr VM, and signs a receipt of everything it did.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
 <header class="bar">
-  <div class="brand"><b>Lockout</b><span>a reliability agent that works with every energy source isolated</span></div>
+  <a class="brand" href="/"><i class="mark" aria-hidden="true"></i><b>Lockout</b></a>
+  <span class="tagline">A reliability agent that works with every energy source isolated</span>
   <div class="gauges" id="gauges" aria-live="polite"></div>
   <nav><a href="/" aria-current="page">Console</a><a href="/verify">Verify a receipt</a></nav>
 </header>
 
-<div class="console">
+<div class="console" id="console">
   <aside class="side">
     <section>
-      <p class="label">Measurement</p>
-      <div class="datasets" id="datasets" role="group" aria-label="Datasets"></div>
+      <h2 class="sec">Measurements</h2>
+      <div class="datasets" id="datasets" role="group" aria-label="Measurements"></div>
       <div class="notes" id="notes" hidden></div>
     </section>
 
     <section class="run">
-      <p class="label">Live run</p>
+      <h2 class="sec">Run the agent</h2>
       <input id="code" type="password" autocomplete="off" placeholder="Access code" aria-label="Access code">
-      <label class="check"><input type="checkbox" id="redteam"> Then red-team the sandbox: replay the injected commands and run the escape probes (+40 s)</label>
+      <label class="check"><input type="checkbox" id="redteam"> Red-team the sandbox afterwards: replay the injected commands and try 11 escapes (adds about 40 s)</label>
       <button class="btn" id="run" type="button">Run the agent</button>
       <div class="hint" id="hint">Judges have the access code. Past runs are open to everyone.</div>
     </section>
 
     <section>
-      <p class="label">Past runs</p>
+      <h2 class="sec">Past runs</h2>
       <div class="runs" id="runs"></div>
     </section>
   </aside>
@@ -46,18 +47,40 @@
         throwaway Vultr VM with no network and no credentials, inside a locked container. The control plane
         recomputes the answer itself, rejects any claim the numbers don't support, drafts the work order, destroys
         the VM, proves it is gone, and signs a receipt of every step.</p>
-      <p>Try <b>prompt_injection</b>: the technician's note tells the agent to exfiltrate keys and report the pump as healthy.</p>
+      <p>Every run ends with a lockout tag: isolated, zero energy verified, answer checked, signed.</p>
+      <p><a class="btn btn-inline" id="latest" href="/" hidden>Open the latest red-team run</a></p>
     </div>
 
     <div id="job" hidden>
-      <div class="jobhead"><h2 id="jobid"></h2><span class="state" id="jobstate"></span></div>
+      <div class="jobhead">
+        <div>
+          <h1 id="jobtitle"></h1>
+          <p class="jobmeta" id="jobmeta"></p>
+        </div>
+        <div class="jobside">
+          <span class="state" id="jobstate"></span>
+          <code class="jobid" id="jobid"></code>
+          <button class="ghost" id="print" type="button" hidden>Print report</button>
+        </div>
+      </div>
+      <p class="printurl" id="printurl"></p>
       <div class="verdict" id="verdict" hidden></div>
-      <div class="lanes-head"><p class="label">Control plane</p><p class="label">Sandbox VM · no network · no credentials · destroyed after the job</p></div>
-      <div class="timeline" id="timeline"></div>
-      <div class="results" id="results" hidden></div>
+      <div id="outcome" hidden></div>
+      <section class="trail">
+        <div class="trail-head">
+          <h2 class="sec" id="trailtitle">How it got there</h2>
+          <p class="hint" id="trailsub">Control plane on the left, the sandbox VM on the right. Every event is hash-chained to the one before and signed into the receipt.</p>
+        </div>
+        <div class="timeline" id="timeline"></div>
+      </section>
     </div>
   </main>
 </div>
-<script src="/static/app.js"></script>
+
+<dialog class="lightbox" id="lightbox" aria-label="Spectrum figure">
+  <form method="dialog"><button class="ghost close" aria-label="Close">Close</button></form>
+  <img id="lightimg" alt="">
+</dialog>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>
