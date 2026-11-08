@@ -22,6 +22,7 @@
 </p>
 
 <p align="center">
+  <a href="https://youtu.be/ef-ZHVJCqYs"><img src="https://img.shields.io/badge/watch-the%204%20min%20video-ff0000?style=for-the-badge&logo=youtube&logoColor=white&labelColor=1c1f22" alt="Watch the 4 minute video"></a>
   <a href="https://agentrush.geekendzone.net"><img src="https://img.shields.io/badge/open-the%20live%20demo-f2b705?style=for-the-badge&labelColor=1c1f22" alt="Open the live demo"></a>
   <a href="https://agentrush.geekendzone.net/verify"><img src="https://img.shields.io/badge/verify-a%20receipt-454b50?style=for-the-badge&labelColor=1c1f22" alt="Verify a receipt"></a>
 </p>
@@ -31,7 +32,8 @@
 (Nov 3–8, 2026), Challenge 1: *Blast Radius Zero*.
 
 Live: **https://agentrush.geekendzone.net**. Past runs are open to everyone; starting a live run
-needs the access code given to the judges.
+needs the access code given to the judges. Video: [a 4-minute walkthrough](https://youtu.be/ef-ZHVJCqYs),
+with a live red-team run.
 
 Before a technician works on a machine, they isolate every energy source and **verify zero
 energy**: lockout/tagout. Lockout does the same with an AI agent. The agent plans a vibration
