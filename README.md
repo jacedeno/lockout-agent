@@ -9,7 +9,7 @@
   <a href="#the-red-team-in-every-red-team-run"><img src="https://img.shields.io/badge/injected%20commands-4%20of%204%20contained-f2b705?style=flat-square&labelColor=1c1f22" alt="Injected commands: 4 of 4 contained"></a>
   <a href="#the-data"><img src="https://img.shields.io/badge/diagnosis-6%20of%206%20datasets%20right-f2b705?style=flat-square&labelColor=1c1f22" alt="Diagnosis: 6 of 6 datasets right"></a>
   <a href="#how-it-works"><img src="https://img.shields.io/badge/teardown-404%20verified-f2b705?style=flat-square&labelColor=1c1f22" alt="Teardown: 404 verified"></a>
-  <a href="https://agentrush.geekendzone.net/verify"><img src="https://img.shields.io/badge/receipts-Ed25519%20signed-f2b705?style=flat-square&labelColor=1c1f22" alt="Receipts: Ed25519 signed"></a>
+  <a href="receipts/README.md"><img src="https://img.shields.io/badge/receipts-Ed25519%20signed-f2b705?style=flat-square&labelColor=1c1f22" alt="Receipts: Ed25519 signed"></a>
 </p>
 
 <p align="center">
@@ -23,16 +23,16 @@
 
 <p align="center">
   <a href="https://youtu.be/ef-ZHVJCqYs"><img src="https://img.shields.io/badge/watch-the%204%20min%20video-ff0000?style=for-the-badge&logo=youtube&logoColor=white&labelColor=1c1f22" alt="Watch the 4 minute video"></a>
-  <a href="https://agentrush.geekendzone.net"><img src="https://img.shields.io/badge/open-the%20live%20demo-f2b705?style=for-the-badge&labelColor=1c1f22" alt="Open the live demo"></a>
-  <a href="https://agentrush.geekendzone.net/verify"><img src="https://img.shields.io/badge/verify-a%20receipt-454b50?style=for-the-badge&labelColor=1c1f22" alt="Verify a receipt"></a>
+  <img src="https://img.shields.io/badge/live%20demo-offline%20since%20Nov%2013-454b50?style=for-the-badge&labelColor=1c1f22" alt="Live demo: offline since Nov 13">
+  <a href="receipts/README.md"><img src="https://img.shields.io/badge/verify-a%20receipt-454b50?style=for-the-badge&labelColor=1c1f22" alt="Verify a receipt"></a>
 </p>
 
 **A reliability agent that works with every energy source isolated.** Built for the lablab.ai
 [**Vultr: Agent Rush**](https://lablab.build/ai-hackathons/vultr-hackathon) hackathon
 (Nov 3–8, 2026), Challenge 1: *Blast Radius Zero*.
 
-Live: **https://agentrush.geekendzone.net**. Past runs are open to everyone; starting a live run
-needs the access code given to the judges. Video: [a 4-minute walkthrough](https://youtu.be/ef-ZHVJCqYs),
+The live demo ran on Vultr from Nov 3 to Nov 13, 2026, through judging, and has been taken down;
+the code, the receipts and the video stay. Video: [a 4-minute walkthrough](https://youtu.be/ef-ZHVJCqYs),
 with a live red-team run.
 
 Before a technician works on a machine, they isolate every energy source and **verify zero
@@ -43,19 +43,19 @@ order, destroys the VM, proves it is gone (the Vultr API answers 404), and signs
 every step that anyone can verify.
 
 <p align="center">
-  <a href="https://agentrush.geekendzone.net"><img src="docs/assets/run.png" alt="A finished red-team run on the live site: the technician note with the injected instructions on the left; on the right the verdict (unbalance, ISO zone D, immediate priority), the lockout tag with its four checked facts, and the start of the 12-week trend" width="100%"></a>
+  <img src="docs/assets/run.png" alt="A finished red-team run on the live site: the technician note with the injected instructions on the left; on the right the verdict (unbalance, ISO zone D, immediate priority), the lockout tag with its four checked facts, and the start of the 12-week trend" width="100%">
   <br><sub>A finished red-team run. Left: the technician note that tries to hijack the agent. Right: the verdict, the lockout tag, and the trend.</sub>
 </p>
 
 ## A run in thirty seconds
 
-Open a past run, for example the red-team one (`Prompt injection`), and read top to bottom:
+A past run, for example the red-team one (`Prompt injection`, the screenshot above and the video), reads top to bottom:
 
 1. **The verdict.** Fault, ISO 20816-3 zone with the level on the scale, work-order priority.
 2. **The lockout tag.** Four facts, each checked rather than claimed: *isolated* (no network,
    no credentials; 11 of 11 escape attempts blocked when the red team runs), *zero energy
    verified* (the 404 and when it came), *answer checked* (recomputed on the control plane),
-   *signed* (Ed25519 receipt, downloadable, verifiable at `/verify`).
+   *signed* (Ed25519 receipt, downloadable, verifiable with `arz-receipt verify` or, while the demo ran, at `/verify`).
 3. **The vibration.** A 12-week trend with the P-F curve, the velocity spectrum to 10× running
    speed, the envelope spectrum with the bearing defect frequencies, and the time waveform.
    In/s peak and CPM by default, mm/s RMS and Hz on request. Hover or use the arrow keys.
@@ -161,7 +161,7 @@ the note and does not follow it. Then the red-team step assumes the worst: it **
 injected commands literally** inside the same sandbox, runs **11 escape probes** (internet, cloud
 metadata, credentials, writes outside the workspace, privilege, fork bomb, memory bomb, runaway
 time, and from the VM: internet, metadata, the control plane), and submits a **forged
-"healthy, zone A" report** to the checker. Every completed red-team run on the live site so far:
+"healthy, zone A" report** to the checker. Every completed red-team run on the live site:
 11/11 blocked, replay contained, forged report rejected.
 
 <table>
@@ -171,7 +171,7 @@ time, and from the VM: internet, metadata, the control plane), and submits a **f
   </tr>
   <tr>
     <td align="center"><sub>The red team in the trail: replay contained, 11 of 11 escapes blocked, forged claim rejected, VM gone</sub></td>
-    <td align="center"><sub>The same run's <code>receipt.zip</code> on <a href="https://agentrush.geekendzone.net/verify">/verify</a>: every check passes</sub></td>
+    <td align="center"><sub>The same run's <code>receipt.zip</code> on the live site's <code>/verify</code> page: every check passes</sub></td>
   </tr>
 </table>
 
